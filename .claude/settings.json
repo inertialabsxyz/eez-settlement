@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "p=$(jq -r '.tool_input.file_path // \"\"'); case \"$p\" in *.sol) forge fmt --check \"$p\" >/dev/null 2>&1 || echo \"forge fmt --check fails on $p (CI runs it as a blocking step). Run 'forge fmt $p' — and if it is a src/ file, mirror the change into its spec appendix, which src/ is extracted from verbatim.\";; esac; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
