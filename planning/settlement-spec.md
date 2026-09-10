@@ -549,13 +549,16 @@ hardest.
 
 Measured figures are from `forge test` against the prototype at `3f54dd1`, using real Uniswap V2
 bytecode. Target figures are **estimates** from storage-slot counts and published opcode costs, and
-are replaced by measurements as the implementation lands.
+are replaced by measurements as the implementation lands. **The L1 `settle` figures are now measured
+too**, by `test/gas/BatchScaling.t.sol`; see the note below the component table. Every figure in this
+section is now labelled.
 
 The "prototype" column is the *existing, superseded* code, included only to show what the target
 figures are extrapolated from. It is not a partial implementation of this specification.
 
 All L2 figures are now **measured against the reference implementations** in the appendices, not
-estimated — see `scratch/` and the note below.
+estimated — see `scratch/` and the note below. The L1 figures were measured later, in this
+repository's `test/gas/` suite.
 
 | | Prototype (superseded) | This design |
 |---|---|---|
@@ -563,8 +566,9 @@ estimated — see `scratch/` and the note below.
 | `submitIntent` (L2), first use of a nonce word | — | **150,139** *(measured)* |
 | `commitBid` (L2), subsequent bid | 119,217 | **99,336** *(measured)* |
 | `commitBid` (L2), first bid, opens the auction | — | **143,121** *(measured)* |
-| `settle` per trade (L1), returning user | 42,332 | **~50,000** |
-| `settle` per trade (L1), user's first trade | — | **~67,000** |
+| `settle` per trade (L1), returning user | 42,332 | **48,044** *(measured)* |
+| `settle` per trade (L1), user's first trade | — | **65,518** *(measured)* |
+| `settle` per trade (L1), first trade *in that token* | — | **82,146** *(measured)* |
 | vs. direct swap (138,735) | −69% | **−64%** / −52% first |
 | Payload | 166.6 B/trade | ~54 B/trade packed, see below |
 
@@ -593,7 +597,21 @@ third movement to remove. The signature premium on top of it is:
 | Nonce bitmap, account's first touch of that word | 20,000 |
 
 So roughly **+7,500 for a returning user and +24,600 on their first trade**. Replay protection
-dominates, not `ecrecover`. In money at ETH $2,490 and L1 at 0.256 gwei, that is $0.0008 and $0.0026
+dominates, not `ecrecover`.
+
+**The estimates above held, and the table was one row short.** `testGasSettleAcrossBatchSizes` in
+`test/gas/BatchScaling.t.sol` measures `settle` at n = 1, 2, 4, 8, 16, 32, 64 and takes the marginal
+cost across the 2 → 64 span, which averages out the constant overhead of the interaction block and
+the restore loop. The returning-user figure came in at **48,044** against an estimated ~50,000, and
+the first-trade figure at **65,518** against ~67,000 — both within 4%. The difference between them,
+**17,474**, is the nonce word alone against the 17,100 this table predicts for it, within 2%.
+
+What the table does not carry is that a settlement has a *second* cold slot per user: the recipient's
+balance in the token they are buying, which `_pay` writes. A user who is new to the protocol and new
+to the token pays both, at **82,146** per trade — 16,628 above the first-trade figure and outside
+anything §11 previously contemplated. It is not a defect in the design and there is nothing to fix in
+`Executor`; it is the ordinary cost of an ERC-20 balance going from zero, and it is listed now because
+a first-trade figure that silently assumed a warm one understated the worst case by a quarter. In money at ETH $2,490 and L1 at 0.256 gwei, that is $0.0008 and $0.0026
 per trade — against roughly $232 of price improvement on a netted 1 ETH order in a thin pool. **The
 gas discussion is not decision-relevant** except for small orders in deep pools, where there is little
 to win either way.
