@@ -100,8 +100,6 @@ Step 2 would duplicate it again. Your job is to remove that duplication before i
    a helper that commits, warps and reveals in one go makes every revert assertion land on the wrong
    call. This has already caused six false failures in this repository; do not reintroduce it.
 
-3. Fix `test/TokenRegistry.t.sol:testRegister` to expect `0` and `1`, per §5.1.1. Add a one-line
-   comment citing the section so the next reader does not "fix" it back.
 
 4. Refactor `test/Smoke.t.sol` and `test/Properties.t.sol` to inherit the fixture and delete their
    duplicated setup. **Their assertions must not change** — the tests that pass now must still pass,
