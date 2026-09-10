@@ -4,7 +4,8 @@ pragma solidity ^0.8.28;
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {SettlementFixture} from "../helpers/SettlementFixture.sol";
 import {Book, IExecutor} from "../../src/Book.sol";
-import {Trade, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
+import {Executor} from "../../src/Executor.sol";
+import {Trade, Interaction, SettlementData, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
 import {TokenRegistry} from "../../src/TokenRegistry.sol";
 
 /// `ECDSA.recover` is `internal`, and `vm.expectRevert` binds to the next
@@ -314,6 +315,54 @@ contract TypesAndRegistryTest is SettlementFixture {
 
         bytes32 separator = book.domainSeparator();
         assertEq(SettlementEIP712.digest(separator, widened), SettlementEIP712.digest(separator, direct));
+    }
+
+    /// §5.2, I9: the same widening, but performed by `Executor` rather than by
+    /// this test. `_verifyAndPull` rebuilds the `SignedIntent` from the narrow
+    /// `Trade` and recovers against it, so a reconstruction that lost a value,
+    /// reordered a field or used a narrowed type string would derive a digest
+    /// other than the one the user signed and revert `BadSignature`. The
+    /// signature is made against `book.domainSeparator()`, so this exercises the
+    /// cross-chain seam on the real path as well.
+    ///
+    /// A single unmatched trade cannot balance, so the settlement is expected to
+    /// fail further down `verify -> pull -> interact -> pay -> restore`. The
+    /// assertion is on *which* revert, not on success.
+    function testFuzzExecutorWidensTradeIntoTheSignedIntentTheUserSigned(
+        uint128 sellAmount,
+        uint128 limit,
+        uint40 deadline,
+        uint64 nonce
+    ) public {
+        deadline = uint40(bound(deadline, block.timestamp, type(uint40).max));
+
+        SignedIntent memory widened = SignedIntent({
+            account: alice,
+            sellToken: address(usdc),
+            buyToken: address(weth),
+            sellAmount: uint256(sellAmount),
+            limit: uint256(limit),
+            deadline: uint256(deadline),
+            nonce: uint256(nonce)
+        });
+
+        Trade[] memory trades = new Trade[](1);
+        trades[0] = Trade(alice, 0, 1, sellAmount, limit, deadline, nonce);
+
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = _signIntent(alicePk, widened);
+
+        SettlementData memory d = SettlementData(_tokens2(), _prices2(), trades, new Interaction[](0));
+
+        vm.prank(address(book));
+        (bool ok, bytes memory err) = address(ex).call(abi.encodeCall(Executor.settle, (d, sigs)));
+
+        if (!ok) {
+            assertTrue(
+                bytes4(err) != Executor.BadSignature.selector,
+                "Executor rebuilt a digest from the narrow Trade that the user never signed"
+            );
+        }
     }
 
     // ------------------------------------------------------------------
