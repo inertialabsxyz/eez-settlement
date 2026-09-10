@@ -755,13 +755,19 @@ contract BookTest is SettlementFixture {
         book.revealAndExecute(aid, d, two, SALT, sigs);
     }
 
-    /// I2, the price vector half: one price per token, no more and no fewer.
+    /// I2, the price vector half: one price per token.
+    ///
+    /// The vector is short rather than long deliberately. `Executor` declares its
+    /// own `LengthMismatch()` over the same two arrays, and an identical error
+    /// name is an identical selector — so an over-long vector still satisfies
+    /// `expectRevert` when L2 waves it through and L1 catches it, and the test
+    /// would prove nothing about where I2 is enforced. A short vector cannot be
+    /// confused: without the L2 check `d.clearingPrices[t.buyIdx]` panics on an
+    /// out-of-bounds read long before the settlement crosses to L1.
     function testLengthMismatchBetweenPricesAndTokensRejected() public {
         (SettlementData memory d, uint256[] memory ids, bytes[] memory sigs) = _single();
-        uint256[] memory p = new uint256[](3);
+        uint256[] memory p = new uint256[](1);
         p[0] = 1e18;
-        p[1] = 2000e18;
-        p[2] = 1e18;
         d.clearingPrices = p;
 
         uint256 aid = _commitFor(d, ids, 0);
