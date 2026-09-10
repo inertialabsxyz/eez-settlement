@@ -390,10 +390,41 @@ pin actually bind:
    settlement between two non-numeraire tokens leaves the pin floating: the whole price vector can be
    quoted in larger units, every fill is byte-identical, and the score is multiplied arbitrarily.
 
-With both rules, one of `p[sell]` and `p[buy]` is always `PRICE_SCALE`, so from §7.3 the score is
-**strictly decreasing in the free price.** A solver who inflates a price to pump the multiplier loses
-more score than they gain. Price inflation stops being a strategy rather than being detected as one —
-this is the property the auction's soundness rests on, and §10 asserts it as a fuzz invariant.
+With both rules, one of `p[sell]` and `p[buy]` is always `PRICE_SCALE`, so from §7.3 the free price
+enters the score linearly, with a sign that depends on which side of the trade the numeraire is on.
+The two cases are not symmetric:
+
+- **The numeraire is sold** (`sellIdx == 0`). The pin fixes `p[sell]`, so the free price appears only
+  in `−limit·p[buy]`: the score is **strictly decreasing** in it. Inflating the price of the token the
+  user is buying costs the solver score outright, and buys them nothing — the user simply receives
+  less of it.
+- **The numeraire is bought** (`buyIdx == 0`). The pin fixes `p[buy]`, and §7.3 reduces to
+  `sellAmount·p[sell]/PRICE_SCALE − limit`. The free price enters with a **positive** coefficient, so
+  here the score *rises* as it is inflated.
+
+The second case does not open a strategy, but the reason is delivery rather than sign. That same
+expression is the buy amount `Executor._pay` hands the user, so the two move together exactly: **every
+point of score bought by inflating a price is one numeraire unit the settlement is then obliged to
+deliver on L1**, where I11 checks that the solver actually sourced it. Stated generally, for any
+`p′ ≥ p` componentwise with the numeraire pinned,
+
+```
+score(p′) − score(p)  ≤  N(p′) − N(p)
+```
+
+where `N` is the numeraire paid out across the batch's numeraire-buy legs. A batch with no
+numeraire-buy leg has `N = 0`, which is the strictly-decreasing case above.
+
+Either way price inflation stops being a strategy rather than being detected as one — this is the
+property the auction's soundness rests on, and §10 asserts it as a fuzz invariant.
+
+> **Corrected 2026-09-11.** This section previously claimed the score was "strictly decreasing in the
+> free price" without qualification. That is true only of the numeraire-sell case; the fuzz tests for
+> I8 found the numeraire-buy case, where a doubled free price takes a 1 WETH → 1,900 USDC intent from
+> a score of 100 to 2,100. The conclusion survives, the mechanism stated above replaces it. The code
+> comment in Appendix D `_validateAndScore` ("Monotone decreasing in the free price") carries the same
+> error and is **not** yet corrected — `src/Book.sol` is that appendix verbatim, so the two must be
+> changed in one commit.
 
 **Cost.** A settlement cannot match token A directly against token B without a numeraire leg. On L1
 that route goes through WETH or USDC in practice anyway. The alternative — per-token reference prices
@@ -486,7 +517,7 @@ Numbered so tests can cite them.
 | I5 | Every trade's buy amount derives from one shared price vector | Structural — not expressible otherwise |
 | I6 | `tokens[0]` is allowlisted and `clearingPrices[0] == PRICE_SCALE` | L2, at reveal |
 | I7 | Every trade has the numeraire on one side | L2, at reveal |
-| I8 | Score is non-increasing in every free price | Property — fuzz invariant |
+| I8 | Inflating a free price never gains score beyond the numeraire it obliges the batch to deliver; with no numeraire-buy leg, score is non-increasing in every free price (§8) | Property — fuzz invariant |
 | I9 | Every pull is covered by the account's EIP-712 signature over those exact terms | **L1** |
 | I10 | No nonce is consumed twice | **L1** |
 | I11 | `Executor` holds exactly its opening balance of every listed token, and of ETH, at exit | **L1** — equality, not a bound |
