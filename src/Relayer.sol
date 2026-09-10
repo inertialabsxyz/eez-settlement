@@ -26,11 +26,7 @@ contract Relayer {
     /// No `to` parameter: funds always land in `Executor`. A caller-specified
     /// destination would be safe only for as long as every caller passed the
     /// right thing.
-    function pullBatch(
-        address[] calldata tokens,
-        address[] calldata froms,
-        uint128[] calldata amounts
-    ) external {
+    function pullBatch(address[] calldata tokens, address[] calldata froms, uint128[] calldata amounts) external {
         if (msg.sender != executor) revert NotExecutor();
         if (tokens.length != froms.length || tokens.length != amounts.length) {
             revert LengthMismatch();

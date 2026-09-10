@@ -2,12 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {
-    SettlementData,
-    Trade,
-    SignedIntent,
-    SettlementEIP712
-} from "./SettlementTypes.sol";
+import {SettlementData, Trade, SignedIntent, SettlementEIP712} from "./SettlementTypes.sol";
 import {TokenRegistry} from "./TokenRegistry.sol";
 
 interface IExecutor {
@@ -25,9 +20,9 @@ contract Book {
     // Configuration
     // ------------------------------------------------------------------
 
-    IExecutor     public immutable executor;
+    IExecutor public immutable executor;
     TokenRegistry public immutable registry;
-    address       public immutable admin;
+    address public immutable admin;
 
     /// The domain the user's signature is scoped to. Pinned to the **L1** chain
     /// and the `Executor` address, because that is where it is consumed. Computed
@@ -39,8 +34,8 @@ contract Book {
     /// they are ratios — but multiplies the score.
     uint256 public constant PRICE_SCALE = 1e18;
 
-    uint40 public constant COMMIT_WINDOW = 60;    // T_C - open
-    uint40 public constant REVEAL_WINDOW = 60;    // one leader's turn
+    uint40 public constant COMMIT_WINDOW = 60; // T_C - open
+    uint40 public constant REVEAL_WINDOW = 60; // one leader's turn
     uint40 public constant MAX_REVEAL_PHASE = 480; // 8 turns, then the auction dies
 
     /// A cancellation cannot take effect inside an auction that was already
@@ -69,10 +64,10 @@ contract Book {
     /// 2 slots, exactly full.
     struct Intent {
         address account;
-        uint24  sellTok;
-        uint24  buyTok;
-        uint40  deadline;
-        uint8   state;
+        uint24 sellTok;
+        uint24 buyTok;
+        uint40 deadline;
+        uint8 state;
         uint128 sellAmount;
         uint128 limit;
     }
@@ -81,19 +76,19 @@ contract Book {
     struct Bid {
         bytes32 commitment;
         address solver;
-        uint88  claimedScore;
-        bool    out;
+        uint88 claimedScore;
+        bool out;
     }
 
     /// 3 slots.
     struct Auction {
         bytes32 leadCommitment;
         address leader;
-        uint88  leadScore;
-        bool    settled;
-        uint40  commitDeadline;  // T_C
-        uint40  revealDeadline;  // T_R
-        uint16  leadIdx;
+        uint88 leadScore;
+        bool settled;
+        uint40 commitDeadline; // T_C
+        uint40 revealDeadline; // T_R
+        uint16 leadIdx;
     }
 
     Intent[] public intents;
@@ -166,10 +161,7 @@ contract Book {
     /// discarded**. Storing 65 bytes would cost three more slots per intent and
     /// erase the two-slot layout; solvers read it from the event and carry it in
     /// the reveal payload. The authoritative check is Executor's, on L1.
-    function submitIntent(SignedIntent calldata intent, bytes calldata signature)
-        external
-        returns (uint256 id)
-    {
+    function submitIntent(SignedIntent calldata intent, bytes calldata signature) external returns (uint256 id) {
         if (intent.account != msg.sender) revert NotOwner();
         if (block.timestamp > intent.deadline) revert Expired();
         if (intent.sellAmount > type(uint128).max || intent.limit > type(uint128).max) {
@@ -192,13 +184,13 @@ contract Book {
         id = intents.length;
         intents.push(
             Intent({
-                account:    msg.sender,
-                sellTok:    _idOf(intent.sellToken),
-                buyTok:     _idOf(intent.buyToken),
-                deadline:   uint40(intent.deadline),
-                state:      LIVE,
+                account: msg.sender,
+                sellTok: _idOf(intent.sellToken),
+                buyTok: _idOf(intent.buyToken),
+                deadline: uint40(intent.deadline),
+                state: LIVE,
                 sellAmount: uint128(intent.sellAmount),
-                limit:      uint128(intent.limit)
+                limit: uint128(intent.limit)
             })
         );
 
@@ -266,7 +258,9 @@ contract Book {
         if (a.commitDeadline == 0) {
             _open(a, id);
         } else if (block.timestamp >= a.commitDeadline) {
-            unchecked { id = ++auctionCount; }
+            unchecked {
+                id = ++auctionCount;
+            }
             _open(auctions[id], id);
         }
     }
@@ -336,9 +330,7 @@ contract Book {
         if (block.timestamp >= a.revealDeadline) revert RevealWindowClosed();
         if (msg.sender != a.leader) revert NotLeader();
 
-        bytes32 c = keccak256(
-            abi.encode(d, intentIds, salt, msg.sender, auctionId, address(this), block.chainid)
-        );
+        bytes32 c = keccak256(abi.encode(d, intentIds, salt, msg.sender, auctionId, address(this), block.chainid));
         if (c != a.leadCommitment) revert BadCommitment();
 
         uint256 score = _validateAndScore(d, intentIds);
@@ -437,8 +429,7 @@ contract Book {
 
             if (
                 nn.account != t.account || nn.sellAmount != t.sellAmount || nn.limit != t.limit
-                    || nn.deadline != t.deadline
-                    || registry.tokenAt(nn.sellTok) != d.tokens[t.sellIdx]
+                    || nn.deadline != t.deadline || registry.tokenAt(nn.sellTok) != d.tokens[t.sellIdx]
                     || registry.tokenAt(nn.buyTok) != d.tokens[t.buyIdx]
             ) revert IntentMismatch(i);
 

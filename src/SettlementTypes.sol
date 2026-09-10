@@ -78,58 +78,40 @@ library SettlementEIP712 {
     string internal constant NAME = "EEZ Settlement";
     string internal constant VERSION = "1";
 
-    bytes32 internal constant INTENT_TYPEHASH =
-        keccak256(
-            "Intent(address account,address sellToken,address buyToken,"
-            "uint256 sellAmount,uint256 limit,uint256 deadline,uint256 nonce)"
-        );
+    bytes32 internal constant INTENT_TYPEHASH = keccak256(
+        "Intent(address account,address sellToken,address buyToken,"
+        "uint256 sellAmount,uint256 limit,uint256 deadline,uint256 nonce)"
+    );
 
     bytes32 private constant DOMAIN_TYPEHASH =
-        keccak256(
-            "EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"
-        );
+        keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)");
 
     /// The domain is pinned to the **L1** chain and the `Executor` address,
     /// because that is where the signature is consumed. `Book` reproduces it
     /// with the L1 chain id it was deployed against — it must not use its own.
-    function domainSeparator(
-        uint256 l1ChainId,
-        address executor
-    ) internal pure returns (bytes32) {
+    function domainSeparator(uint256 l1ChainId, address executor) internal pure returns (bytes32) {
         return
             keccak256(
-                abi.encode(
-                    DOMAIN_TYPEHASH,
-                    keccak256(bytes(NAME)),
-                    keccak256(bytes(VERSION)),
-                    l1ChainId,
-                    executor
-                )
+                abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(NAME)), keccak256(bytes(VERSION)), l1ChainId, executor)
             );
     }
 
-    function hashStruct(
-        SignedIntent memory intent
-    ) internal pure returns (bytes32) {
-        return
-            keccak256(
-                abi.encode(
-                    INTENT_TYPEHASH,
-                    intent.account,
-                    intent.sellToken,
-                    intent.buyToken,
-                    intent.sellAmount,
-                    intent.limit,
-                    intent.deadline,
-                    intent.nonce
-                )
-            );
+    function hashStruct(SignedIntent memory intent) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                INTENT_TYPEHASH,
+                intent.account,
+                intent.sellToken,
+                intent.buyToken,
+                intent.sellAmount,
+                intent.limit,
+                intent.deadline,
+                intent.nonce
+            )
+        );
     }
 
-    function digest(
-        bytes32 separator,
-        SignedIntent memory intent
-    ) internal pure returns (bytes32) {
+    function digest(bytes32 separator, SignedIntent memory intent) internal pure returns (bytes32) {
         return MessageHashUtils.toTypedDataHash(separator, hashStruct(intent));
     }
 }

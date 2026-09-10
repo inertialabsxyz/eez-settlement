@@ -9,10 +9,7 @@ import {SettlementData, Trade, Interaction, SignedIntent, SettlementEIP712} from
 import {Relayer} from "./Relayer.sol";
 
 interface IEEZ {
-    function computeCrossChainProxyAddress(
-        address target,
-        uint64 rollupId
-    ) external view returns (address);
+    function computeCrossChainProxyAddress(address target, uint64 rollupId) external view returns (address);
 }
 
 /// The L1 half. Verifies, performs a payload, and refuses to end the
@@ -60,10 +57,7 @@ contract Executor {
     event Settled(uint256 trades, uint256 interactions);
 
     constructor(address _eez, uint64 _l2RollupId, address _windfallRecipient) {
-        require(
-            _windfallRecipient != address(0),
-            "windfall recipient required"
-        );
+        require(_windfallRecipient != address(0), "windfall recipient required");
         admin = msg.sender;
         eez = _eez;
         l2RollupId = _l2RollupId;
@@ -71,10 +65,7 @@ contract Executor {
         relayer = new Relayer(address(this));
 
         _cachedChainId = block.chainid;
-        _cachedSeparator = SettlementEIP712.domainSeparator(
-            block.chainid,
-            address(this)
-        );
+        _cachedSeparator = SettlementEIP712.domainSeparator(block.chainid, address(this));
     }
 
     function setL2Caller(address book) external {
@@ -93,13 +84,9 @@ contract Executor {
     /// writes its own — a divergence here would pass on L2 at submission and
     /// fail on L1 after the batch had already crossed.
     function domainSeparator() public view returns (bytes32) {
-        return
-            block.chainid == _cachedChainId
-                ? _cachedSeparator
-                : SettlementEIP712.domainSeparator(
-                    block.chainid,
-                    address(this)
-                );
+        return block.chainid == _cachedChainId
+            ? _cachedSeparator
+            : SettlementEIP712.domainSeparator(block.chainid, address(this));
     }
 
     // ------------------------------------------------------------------
@@ -116,10 +103,7 @@ contract Executor {
     /// I19: this is the only entry point that emits calls or moves value. The
     /// reentrancy argument depends on it — a target re-entering here fails the
     /// proxy check, and there is nowhere else to enter.
-    function settle(
-        SettlementData calldata d,
-        bytes[] calldata signatures
-    ) external {
+    function settle(SettlementData calldata d, bytes[] calldata signatures) external {
         if (msg.sender != expectedProxy) revert NotProxy();
         if (signatures.length != d.trades.length) revert LengthMismatch();
         if (d.clearingPrices.length != d.tokens.length) revert LengthMismatch();
@@ -141,10 +125,7 @@ contract Executor {
 
     /// Recover each account's signature over the exact terms being executed, then
     /// pull in one call. I9 and I10 — the checks that survive a compromised L2.
-    function _verifyAndPull(
-        SettlementData calldata d,
-        bytes[] calldata signatures
-    ) private {
+    function _verifyAndPull(SettlementData calldata d, bytes[] calldata signatures) private {
         uint256 n = d.trades.length;
         address[] memory tokens = new address[](n);
         address[] memory froms = new address[](n);
@@ -176,8 +157,9 @@ contract Executor {
             );
             // OZ's recover reverts on a malleable or malformed signature rather
             // than returning address(0), so high-s is rejected for us.
-            if (ECDSA.recover(digest, signatures[i]) != t.account)
+            if (ECDSA.recover(digest, signatures[i]) != t.account) {
                 revert BadSignature(i);
+            }
 
             tokens[i] = sellToken;
             froms[i] = t.account;
@@ -204,7 +186,7 @@ contract Executor {
         for (uint256 i = 0; i < d.calls.length; i++) {
             Interaction calldata c = d.calls[i];
             if (c.target == r) revert TargetForbidden(i);
-            (bool ok, ) = c.target.call(c.callData);
+            (bool ok,) = c.target.call(c.callData);
             if (!ok) revert InteractionFailed(i);
         }
     }
@@ -218,11 +200,7 @@ contract Executor {
     function _pay(SettlementData calldata d) private {
         for (uint256 i = 0; i < d.trades.length; i++) {
             Trade calldata t = d.trades[i];
-            uint256 buyAmount = Math.mulDiv(
-                t.sellAmount,
-                d.clearingPrices[t.sellIdx],
-                d.clearingPrices[t.buyIdx]
-            );
+            uint256 buyAmount = Math.mulDiv(t.sellAmount, d.clearingPrices[t.sellIdx], d.clearingPrices[t.buyIdx]);
             if (buyAmount < t.limit) revert LimitNotMet(i, buyAmount, t.limit);
             IERC20(d.tokens[t.buyIdx]).safeTransfer(t.account, buyAmount);
         }
@@ -234,11 +212,7 @@ contract Executor {
     /// I17 — residue goes to a protocol address the solver cannot name. A
     /// solver-nominated destination would turn any failure to pay a user into
     /// solver revenue, with every balance check still passing.
-    function _restore(
-        SettlementData calldata d,
-        uint256[] memory opening,
-        uint256 openingEth
-    ) private {
+    function _restore(SettlementData calldata d, uint256[] memory opening, uint256 openingEth) private {
         for (uint256 i = 0; i < d.tokens.length; i++) {
             IERC20 token = IERC20(d.tokens[i]);
             uint256 bal = token.balanceOf(address(this));
