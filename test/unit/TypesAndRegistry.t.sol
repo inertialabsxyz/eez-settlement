@@ -158,9 +158,10 @@ contract TypesAndRegistryTest is SettlementFixture {
         assertEq(book.domainSeparator(), ex.domainSeparator());
     }
 
-    /// The same seam, over arbitrary intents: the two chains must derive
-    /// byte-identical digests, and a signature produced against `Book`'s domain
-    /// must recover to the signer under `Executor`'s.
+    /// §5.3, I9: the same seam, over arbitrary intents. Both chains compute
+    /// through `SettlementEIP712` and neither writes its own, so the digests
+    /// must be byte-identical for every `SignedIntent` — a divergence would pass
+    /// on L2 at submission and fail on L1 after the batch had already crossed.
     function testFuzzBookAndExecutorDeriveIdenticalDigests(
         address sellToken,
         address buyToken,
@@ -201,8 +202,9 @@ contract TypesAndRegistryTest is SettlementFixture {
         assertEq(afterFork, _handBuiltDomain(block.chainid, address(ex)));
     }
 
-    /// The reason the check exists: a signature from the original chain must not
-    /// authorise a pull on the fork.
+    /// §5.3, I9: the reason the check exists. The domain binds the L1 chain id
+    /// precisely so that a signature from the original chain does not authorise
+    /// a pull on the fork.
     function testSignatureDoesNotReplayOnFork() public {
         SignedIntent memory i = _intent(alice, address(usdc), address(weth), 2000 ether, 0.9 ether, 0);
         bytes memory sig = _signIntent(alicePk, i);
@@ -218,11 +220,8 @@ contract TypesAndRegistryTest is SettlementFixture {
     // ------------------------------------------------------------------
 
     /// secp256k1 group order. For any valid `(r, s, v)` the pair `(r, n - s)`
-    /// with `v` flipped recovers the same address, which would make a signature
-    /// non-unique. OpenZeppelin's `ECDSA.recover` **reverts** on high `s` rather
-    /// than returning `address(0)`; both halves of that are pinned here, because
-    /// `Book` and `Executor` both treat a non-reverting mismatch as a plain bad
-    /// signature and a change would be silent.
+    /// with `v` flipped recovers the same address, which is what would make a
+    /// signature non-unique.
     uint256 internal constant SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
 
     function _malleate(bytes memory sig) internal pure returns (bytes memory, bytes32) {
@@ -237,6 +236,12 @@ contract TypesAndRegistryTest is SettlementFixture {
         return (abi.encodePacked(r, highS, flipped), highS);
     }
 
+    /// I9, Appendix B `_verifyAndPull`: `Executor` relies on OpenZeppelin's
+    /// `ECDSA.recover` **reverting** on high `s` rather than returning
+    /// `address(0)` — its own check is only `recovered != t.account`, so a
+    /// second valid signature over the same terms would otherwise be a second
+    /// authorisation. Both halves of that behaviour are pinned here, because a
+    /// change in either would be silent.
     function testHighSSignatureRejected() public {
         SignedIntent memory i = _intent(alice, address(usdc), address(weth), 2000 ether, 0.9 ether, 0);
         bytes32 digest = SettlementEIP712.digest(book.domainSeparator(), i);
@@ -246,9 +251,9 @@ contract TypesAndRegistryTest is SettlementFixture {
         probe.recover(digest, malleable);
     }
 
-    /// The same rejection on the real L2 path, so that the fail-fast check in
-    /// `submitIntent` cannot be satisfied by a second signature over the same
-    /// intent.
+    /// §5.3, I9: the same rejection on the real L2 path. `Book`'s fail-fast
+    /// check at submission goes through the same `ECDSA.recover`, so it cannot
+    /// be satisfied by a second, malleated signature over the same intent.
     function testHighSSignatureRejectedAtBookSubmit() public {
         SignedIntent memory i = _intent(alice, address(usdc), address(weth), 2000 ether, 0.9 ether, 0);
         (bytes memory malleable, bytes32 highS) = _malleate(_signIntent(alicePk, i));
@@ -366,7 +371,9 @@ contract TypesAndRegistryTest is SettlementFixture {
         assertTrue(found, "the token holding id 0 reported as absent");
     }
 
-    /// The registry is append-only: an id, once handed out, never moves.
+    /// §5.1.1: the registry is append-only, so an id once handed out never
+    /// moves. `Intent` stores the id, not the address, so a shifting id would
+    /// silently repoint every intent already in storage.
     function testIdsAreStableAcrossLaterRegistrations() public {
         TokenRegistry fresh = new TokenRegistry();
 
@@ -393,9 +400,9 @@ contract TypesAndRegistryTest is SettlementFixture {
         reg.tokenAt(pastEnd);
     }
 
-    /// The same on an empty registry, where every id is past the end — id 0
-    /// included, which the `id >= tokens.length` bound covers and a `id == 0`
-    /// sentinel would not.
+    /// §5.1.1, Appendix E: the same on an empty registry, where every id is
+    /// past the end — id 0 included, which the `id >= tokens.length` bound
+    /// covers and an `id == 0` sentinel would not.
     function testTokenAtRevertsOnEmptyRegistry() public {
         TokenRegistry fresh = new TokenRegistry();
 
