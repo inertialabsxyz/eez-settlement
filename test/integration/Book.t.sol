@@ -835,10 +835,25 @@ contract BookTest is SettlementFixture {
     }
 
     /// I1: the sell token, resolved registry id → address before matching.
+    ///
+    /// Only the sell leg differs. Alice signed a DAI sale; the trade sells
+    /// `tokens[0]`, which is USDC. Her buy leg still matches, and the numeraire
+    /// rule is satisfied, so nothing but the sell-token comparison can reject
+    /// this — swapping `sellIdx` and `buyIdx` instead would be caught by the buy
+    /// side and prove nothing about the sell side.
     function testTradeSellTokenMismatchRejected() public {
-        (SettlementData memory d, uint256[] memory ids, bytes[] memory sigs) = _single();
-        d.trades[0].sellIdx = 1; // WETH, not the USDC she signed
-        d.trades[0].buyIdx = 0;
+        (uint256 i0, bytes memory s0) =
+            _submitIntent(alicePk, _intent(alice, address(dai), address(weth), 2000 ether, 0.9 ether, 0));
+
+        Trade[] memory tr = new Trade[](1);
+        tr[0] = Trade(alice, 0, 1, 2000 ether, 0.9 ether, dl, 0);
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = i0;
+        bytes[] memory sigs = new bytes[](1);
+        sigs[0] = s0;
+
+        SettlementData memory d = SettlementData(_tokens2(), _prices2(), tr, new Interaction[](0));
 
         uint256 aid = _commitFor(d, ids, 0);
         vm.expectRevert(abi.encodeWithSelector(Book.IntentMismatch.selector, 0));
