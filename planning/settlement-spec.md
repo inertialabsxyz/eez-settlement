@@ -569,7 +569,7 @@ repository's `test/gas/` suite.
 | `settle` per trade (L1), returning user | 42,332 | **48,044** *(measured)* |
 | `settle` per trade (L1), user's first trade | — | **65,518** *(measured)* |
 | `settle` per trade (L1), first trade *in that token* | — | **82,146** *(measured)* |
-| vs. direct swap (138,735) | −69% | **−64%** / −52% first |
+| vs. direct swap (138,735) | −69% | **−65%** / −53% first *(measured)* |
 | Payload | 166.6 B/trade | ~54 B/trade packed, see below |
 
 **The earlier estimates in this section were wrong, and low.** They were derived from storage-slot
@@ -597,7 +597,10 @@ third movement to remove. The signature premium on top of it is:
 | Nonce bitmap, account's first touch of that word | 20,000 |
 
 So roughly **+7,500 for a returning user and +24,600 on their first trade**. Replay protection
-dominates, not `ecrecover`.
+dominates, not `ecrecover`. In money at ETH $2,490 and L1 at 0.256 gwei, that is $0.0008 and $0.0026
+per trade — against roughly $232 of price improvement on a netted 1 ETH order in a thin pool. **The
+gas discussion is not decision-relevant** except for small orders in deep pools, where there is little
+to win either way.
 
 **The estimates above held, and the table was one row short.** `testGasSettleAcrossBatchSizes` in
 `test/gas/BatchScaling.t.sol` measures `settle` at n = 1, 2, 4, 8, 16, 32, 64 and takes the marginal
@@ -611,10 +614,7 @@ balance in the token they are buying, which `_pay` writes. A user who is new to 
 to the token pays both, at **82,146** per trade — 16,628 above the first-trade figure and outside
 anything §11 previously contemplated. It is not a defect in the design and there is nothing to fix in
 `Executor`; it is the ordinary cost of an ERC-20 balance going from zero, and it is listed now because
-a first-trade figure that silently assumed a warm one understated the worst case by a quarter. In money at ETH $2,490 and L1 at 0.256 gwei, that is $0.0008 and $0.0026
-per trade — against roughly $232 of price improvement on a netted 1 ETH order in a thin pool. **The
-gas discussion is not decision-relevant** except for small orders in deep pools, where there is little
-to win either way.
+a first-trade figure that silently assumed a warm one understated the worst case by a quarter.
 
 Cost of competing is **flat, and independent of batch size** — a commitment is a hash and a number.
 Losing an auction no longer costs a solver in proportion to the solution they built (G5).
