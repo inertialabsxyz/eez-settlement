@@ -57,7 +57,7 @@ Three test files already exist:
 - `test/Properties.t.sol` — eight security properties plus a gas readout. Passing.
 - `test/TokenRegistry.t.sol` — two tests, one failing. See "Known starting condition" above.
 
-`forge test` currently reports 11 passing, 1 failing.
+`forge test` currently reports 12 passing.
 
 There is no shared fixture. `Smoke.t.sol` and `Properties.t.sol` each duplicate the full deployment,
 token setup, EIP-712 signing and commit/reveal dance — roughly 80 lines apiece. Every suite added in
