@@ -241,13 +241,13 @@ contract ExecutorTest is SettlementFixture {
     }
 
     /// I9: the deadline is signed, so a payload cannot extend an intent's life.
+    /// The signature stays as alice wrote it; the payload tries to carry a
+    /// later expiry than the one she put her name to.
     function testDeadlineMismatchRejected() public {
         SettlementData memory d = _pair();
         bytes[] memory sigs = _sigs2(d);
 
-        SignedIntent memory signed = _intentOf(d, 0);
-        signed.deadline = uint256(dl) + 1;
-        sigs[0] = _signIntent(alicePk, signed);
+        d.trades[0].deadline = dl + 1;
 
         vm.prank(address(book));
         vm.expectRevert(abi.encodeWithSelector(Executor.BadSignature.selector, 0));
@@ -255,19 +255,22 @@ contract ExecutorTest is SettlementFixture {
     }
 
     /// I9: a signature naming one account cannot authorise a pull from another.
-    /// This is the shape a compromised L2 would reach for — reuse a real
-    /// signature against a different victim's balance.
+    /// This is the shape a compromised L2 would reach for — alice's genuine
+    /// signature over her genuine terms, re-pointed at carol's balance. The
+    /// signature is untouched; only the payload's `account` moves.
     function testAccountMismatchRejected() public {
         SettlementData memory d = _pair();
         bytes[] memory sigs = _sigs2(d);
 
-        SignedIntent memory signed = _intentOf(d, 0);
-        signed.account = bob;
-        sigs[0] = _signIntent(alicePk, signed);
+        _fund(usdc, carol, 2000 ether);
+        _approveAll(carol);
+        d.trades[0].account = carol;
 
         vm.prank(address(book));
         vm.expectRevert(abi.encodeWithSelector(Executor.BadSignature.selector, 0));
         ex.settle(d, sigs);
+
+        assertEq(usdc.balanceOf(carol), 2000 ether, "carol was never pulled from");
     }
 
     /// I9: correct terms, wrong key. The index in the error is the failing
