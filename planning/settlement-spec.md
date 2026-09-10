@@ -410,7 +410,7 @@ settle(d, signatures)
   ├─ pull       one Relayer.pullBatch call — safeTransferFrom each seller
   ├─ interact   solver-supplied calls, rejecting any that target Relayer
   ├─ pay        buyAmount = mulDiv(sellAmount, p[sell], p[buy]); require >= limit; safeTransfer
-  │             count each payment; require count == trades.length
+  │             I16: the loop is unconditional — no runtime counter, see §9.1
   ├─ sweep      for each token: require bal >= opening[i]
   │             send bal − opening[i] to windfallRecipient
   └─ prove      for each token: require balanceOf(tokens[i]) == opening[i]
