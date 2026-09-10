@@ -5,6 +5,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {SettlementFixture} from "../helpers/SettlementFixture.sol";
 import {Book, IExecutor} from "../../src/Book.sol";
 import {Trade, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
+import {TokenRegistry} from "../../src/TokenRegistry.sol";
 
 /// `ECDSA.recover` is `internal`, and `vm.expectRevert` binds to the next
 /// *external* call. Without this wrapper the expectation would land on whatever
@@ -308,5 +309,127 @@ contract TypesAndRegistryTest is SettlementFixture {
 
         bytes32 separator = book.domainSeparator();
         assertEq(SettlementEIP712.digest(separator, widened), SettlementEIP712.digest(separator, direct));
+    }
+
+    // ------------------------------------------------------------------
+    // 6. TokenRegistry — id semantics (§5.1.1, Appendix E)
+    // ------------------------------------------------------------------
+
+    /// §5.1.1: `id == index`. A fresh registry hands out 0 first, so the id can
+    /// be used to index `tokens` directly.
+    function testFirstRegistrationIsIdZero() public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        assertEq(fresh.register(address(usdc)), 0);
+        assertEq(fresh.register(address(weth)), 1);
+        assertEq(fresh.register(address(dai)), 2);
+    }
+
+    /// §5.1.1: `id == index` — the id is the position in `tokens`, which is what
+    /// lets `Intent` compress to two slots.
+    function testIdEqualsIndex() public view {
+        for (uint24 i = 0; i < uint24(reg.count()); i++) {
+            (uint24 id, bool found) = reg.idOf(reg.tokens(i));
+            assertTrue(found);
+            assertEq(id, i, "id diverged from index");
+            assertEq(reg.tokenAt(i), reg.tokens(i));
+        }
+    }
+
+    /// §5.1.1: registration is idempotent, so a token cannot acquire two ids.
+    /// Not a safety issue — `Book` resolves id to address before matching a
+    /// trade — but wasteful and confusing.
+    function testRegisterIsIdempotent() public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        uint24 first = fresh.register(address(usdc));
+        assertEq(fresh.register(address(usdc)), first);
+        assertEq(fresh.register(address(usdc)), first);
+        assertEq(fresh.count(), 1, "an idempotent re-registration still grew the registry");
+    }
+
+    /// §5.1.1: this distinction is the entire reason `idOf` returns two values.
+    /// Id 0 is a legitimate token, so a bare zero return cannot tell "the first
+    /// token registered" from "not here" — the two cases below differ only in
+    /// `found`.
+    function testIdOfDistinguishesUnregisteredFromIdZero() public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        (uint24 id, bool found) = fresh.idOf(address(usdc));
+        assertEq(id, 0);
+        assertFalse(found, "an unregistered token reported as found");
+
+        fresh.register(address(usdc));
+
+        (id, found) = fresh.idOf(address(usdc));
+        assertEq(id, 0, "the first registered token did not hold id 0");
+        assertTrue(found, "the token holding id 0 reported as absent");
+    }
+
+    /// The registry is append-only: an id, once handed out, never moves.
+    function testIdsAreStableAcrossLaterRegistrations() public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        uint24 usdcId = fresh.register(address(usdc));
+        fresh.register(address(weth));
+        fresh.register(address(dai));
+
+        (uint24 id, bool found) = fresh.idOf(address(usdc));
+        assertTrue(found);
+        assertEq(id, usdcId, "an earlier id moved when a later token was registered");
+        assertEq(fresh.tokenAt(usdcId), address(usdc));
+    }
+
+    // ------------------------------------------------------------------
+    // 7. TokenRegistry — bounds (§5.1.1, Appendix E)
+    // ------------------------------------------------------------------
+
+    /// Appendix E: `tokenAt` reverts `UnknownId` past the end rather than
+    /// reading out of bounds.
+    function testTokenAtRevertsUnknownIdPastTheEnd() public {
+        uint24 pastEnd = uint24(reg.count());
+
+        vm.expectRevert(TokenRegistry.UnknownId.selector);
+        reg.tokenAt(pastEnd);
+    }
+
+    /// The same on an empty registry, where every id is past the end — id 0
+    /// included, which the `id >= tokens.length` bound covers and a `id == 0`
+    /// sentinel would not.
+    function testTokenAtRevertsOnEmptyRegistry() public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        vm.expectRevert(TokenRegistry.UnknownId.selector);
+        fresh.tokenAt(0);
+    }
+
+    /// Appendix E: `register(address(0))` reverts `ZeroAddress`. The zero
+    /// address would otherwise take a real id and index a token that cannot be
+    /// transferred.
+    function testRegisterZeroAddressReverts() public {
+        vm.expectRevert(TokenRegistry.ZeroAddress.selector);
+        reg.register(address(0));
+    }
+
+    /// Fuzzed over the whole address space: every non-zero address registers and
+    /// round-trips, and the zero address never does. Registration is
+    /// permissionless and ungoverned — an id confers nothing (§5.1.1), so there
+    /// is no eligibility check to pass.
+    function testFuzzRegisterRoundTrips(address token) public {
+        TokenRegistry fresh = new TokenRegistry();
+
+        if (token == address(0)) {
+            vm.expectRevert(TokenRegistry.ZeroAddress.selector);
+            fresh.register(token);
+            return;
+        }
+
+        uint24 id = fresh.register(token);
+        assertEq(id, 0);
+        assertEq(fresh.tokenAt(id), token);
+
+        (uint24 got, bool found) = fresh.idOf(token);
+        assertTrue(found);
+        assertEq(got, id);
     }
 }
