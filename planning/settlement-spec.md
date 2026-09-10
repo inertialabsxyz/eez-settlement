@@ -145,6 +145,7 @@ struct Auction {
     bool    settled;         //         byte  31
     uint40  commitDeadline;  // slot 2, bytes 0–4    T_C
     uint40  revealDeadline;  //         bytes 5–9    T_R
+    uint16  leadIdx;         //         bytes 10–11  the cached leader's bid
 }
 ```
 
