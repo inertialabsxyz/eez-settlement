@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.28;
 
 import {Test} from "forge-std/Test.sol";
 import {TokenRegistry} from "../src/TokenRegistry.sol";
@@ -22,11 +22,13 @@ contract TokenRegistryTest is Test {
         tokenB = new MockToken(1_000_000 ether);
     }
 
+    /// §5.1.1: `id == index`, so the first token registered holds id 0 — not 1.
+    /// Registration is idempotent, so a token cannot acquire two ids.
     function testRegister() public {
-        assertEq(registry.register(address(tokenA)), 1);
-        assertEq(registry.register(address(tokenA)), 1);
-        assertEq(registry.register(address(tokenB)), 2);
-        assertEq(registry.register(address(tokenB)), 2);
+        assertEq(registry.register(address(tokenA)), 0);
+        assertEq(registry.register(address(tokenA)), 0);
+        assertEq(registry.register(address(tokenB)), 1);
+        assertEq(registry.register(address(tokenB)), 1);
     }
 
     function testTokenAt() public {
