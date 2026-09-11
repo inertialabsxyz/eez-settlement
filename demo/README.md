@@ -101,16 +101,20 @@ design, and it costs the loser exactly one commit's gas (§7.2).
 ## The market
 
 Four tokens, two Uniswap V2 deployments at different depths, seven pools, and a
-fixed-price OTC maker with finite inventory. Measured on `eez-dev`, USDC→WETH has
-three different best routes across the size range:
+fixed-price OTC maker with finite inventory. Computed from the reserves
+`script/install-l1.sh` installs, USDC→WETH has three different best routes across
+the size range:
 
 ```
   USDC in      UniA      UniB       OTC   viaDAI  viaWBTC   best
-      500  0.249244  0.250471  0.251889  0.253445  0.248471  viaDAI
-    2,000  0.996901  1.001508  1.007557  1.013248  0.993515  viaDAI
-   20,000  9.960070  9.970150 10.075567 10.068965  9.890883  OTC
-  200,000 98.715803 95.420395  0.000000 94.750433 94.690042  UniA
+      500  0.249244  0.250471  0.251889  0.253529  0.248471  viaDAI
+    2,000  0.996901  1.001508  1.007557  1.013579  0.993515  viaDAI
+   20,000  9.960070  9.970150 10.075567 10.071787  9.890883  OTC
+  200,000 98.715803 95.420395  0.000000 94.735946 94.690042  UniA
 ```
+
+That is the table at t=0. `npm run quotes` prints the live one, which drifts
+under the noise trader — run it twice during a demo and the best column moves.
 
 via-WBTC never wins at any size, which is the point: a router has to compare
 rather than prefer complexity. The OTC maker quotes flat until its inventory runs
