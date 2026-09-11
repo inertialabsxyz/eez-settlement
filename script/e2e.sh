@@ -188,11 +188,13 @@ run_auction() {
         || { fail "$label: the front rejected the reveal"; return 1; }
     info "reveal dispatched: $hash"
 
-    # The front does not advance its nonce until the call has settled on both
-    # chains. The L2 effect appears earlier than that and can still unwind, so
-    # the nonce is the signal and `auctions(id).settled` is the confirmation.
+    # The front's nonce advancing means only that the send is no longer in
+    # flight -- it moves on the front's own reservation schedule, ahead of the L1
+    # state becoming readable, so it is not a "settled on both chains" signal
+    # (§13.4). Waited on here to avoid polling a chain that has not been asked
+    # anything yet; every assertion below waits on a chain fact instead.
     if wait_settled "$SOLVER" "$sent_nonce" 150; then
-        info "front nonce advanced"
+        info "front nonce advanced; the send is no longer in flight"
     else
         note "front nonce did not advance within 150s; checking the effect anyway"
     fi
@@ -225,9 +227,6 @@ run_auction() {
     # atomicity claim failing: §9 says the whole settlement lands on L1 or none
     # of it does, and every L2 write unwinds with it.
     fail "$label: auction $id is settled on L2 but L1 never consumed the nonce -- the two chains disagree"
-    return 1
-
-    note "auction $id is not settled (L2 now $(l2_now), T_R $t_r)"
     return 1
 }
 

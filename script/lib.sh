@@ -109,9 +109,12 @@ xsend() {
 
 # Block until the front's nonce for `who` moves past `want`.
 #
-# The front does not advance it until the call has settled on BOTH chains, which
-# makes this the only reliable "previous call is done" signal. The L2 effect
-# appears earlier and can still roll back. (gotcha 4)
+# This means "the send is no longer in flight" and nothing stronger. The nonce
+# moves on the front's own reservation schedule, ahead of the L1 state becoming
+# readable, so it is NOT a "settled on both chains" signal -- §13.4 records a run
+# that asserted the moment it moved, read an L1 that had not caught up, and
+# reported six failures for a settlement that had landed. Wait on an L1 fact.
+# (gotcha 4)
 wait_settled() {
     local who="$1" want="$2" timeout="${3:-120}" i n
     for i in $(seq 1 "$timeout"); do
