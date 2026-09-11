@@ -390,10 +390,41 @@ pin actually bind:
    settlement between two non-numeraire tokens leaves the pin floating: the whole price vector can be
    quoted in larger units, every fill is byte-identical, and the score is multiplied arbitrarily.
 
-With both rules, one of `p[sell]` and `p[buy]` is always `PRICE_SCALE`, so from §7.3 the score is
-**strictly decreasing in the free price.** A solver who inflates a price to pump the multiplier loses
-more score than they gain. Price inflation stops being a strategy rather than being detected as one —
-this is the property the auction's soundness rests on, and §10 asserts it as a fuzz invariant.
+With both rules, one of `p[sell]` and `p[buy]` is always `PRICE_SCALE`, so from §7.3 the free price
+enters the score linearly, with a sign that depends on which side of the trade the numeraire is on.
+The two cases are not symmetric:
+
+- **The numeraire is sold** (`sellIdx == 0`). The pin fixes `p[sell]`, so the free price appears only
+  in `−limit·p[buy]`: the score is **strictly decreasing** in it. Inflating the price of the token the
+  user is buying costs the solver score outright, and buys them nothing — the user simply receives
+  less of it.
+- **The numeraire is bought** (`buyIdx == 0`). The pin fixes `p[buy]`, and §7.3 reduces to
+  `sellAmount·p[sell]/PRICE_SCALE − limit`. The free price enters with a **positive** coefficient, so
+  here the score *rises* as it is inflated.
+
+The second case does not open a strategy, but the reason is delivery rather than sign. That same
+expression is the buy amount `Executor._pay` hands the user, so the two move together exactly: **every
+point of score bought by inflating a price is one numeraire unit the settlement is then obliged to
+deliver on L1**, where I11 checks that the solver actually sourced it. Stated generally, for any
+`p′ ≥ p` componentwise with the numeraire pinned,
+
+```
+score(p′) − score(p)  ≤  N(p′) − N(p)
+```
+
+where `N` is the numeraire paid out across the batch's numeraire-buy legs. A batch with no
+numeraire-buy leg has `N = 0`, which is the strictly-decreasing case above.
+
+Either way price inflation stops being a strategy rather than being detected as one — this is the
+property the auction's soundness rests on, and §10 asserts it as a fuzz invariant.
+
+> **Corrected 2026-09-11.** This section previously claimed the score was "strictly decreasing in the
+> free price" without qualification. That is true only of the numeraire-sell case; the fuzz tests for
+> I8 found the numeraire-buy case, where a doubled free price takes a 1 WETH → 1,900 USDC intent from
+> a score of 100 to 2,100. The conclusion survives, the mechanism stated above replaces it. The code
+> comment in Appendix D `_validateAndScore` ("Monotone decreasing in the free price") carries the same
+> error and is **not** yet corrected — `src/Book.sol` is that appendix verbatim, so the two must be
+> changed in one commit.
 
 **Cost.** A settlement cannot match token A directly against token B without a numeraire leg. On L1
 that route goes through WETH or USDC in practice anyway. The alternative — per-token reference prices
@@ -486,7 +517,7 @@ Numbered so tests can cite them.
 | I5 | Every trade's buy amount derives from one shared price vector | Structural — not expressible otherwise |
 | I6 | `tokens[0]` is allowlisted and `clearingPrices[0] == PRICE_SCALE` | L2, at reveal |
 | I7 | Every trade has the numeraire on one side | L2, at reveal |
-| I8 | Score is non-increasing in every free price | Property — fuzz invariant |
+| I8 | Inflating a free price never gains score beyond the numeraire it obliges the batch to deliver; with no numeraire-buy leg, score is non-increasing in every free price (§8) | Property — fuzz invariant |
 | I9 | Every pull is covered by the account's EIP-712 signature over those exact terms | **L1** |
 | I10 | No nonce is consumed twice | **L1** |
 | I11 | `Executor` holds exactly its opening balance of every listed token, and of ETH, at exit | **L1** — equality, not a bound |
@@ -518,13 +549,16 @@ hardest.
 
 Measured figures are from `forge test` against the prototype at `3f54dd1`, using real Uniswap V2
 bytecode. Target figures are **estimates** from storage-slot counts and published opcode costs, and
-are replaced by measurements as the implementation lands.
+are replaced by measurements as the implementation lands. **The L1 `settle` figures are now measured
+too**, by `test/gas/BatchScaling.t.sol`; see the note below the component table. Every figure in this
+section is now labelled.
 
 The "prototype" column is the *existing, superseded* code, included only to show what the target
 figures are extrapolated from. It is not a partial implementation of this specification.
 
 All L2 figures are now **measured against the reference implementations** in the appendices, not
-estimated — see `scratch/` and the note below.
+estimated — see `scratch/` and the note below. The L1 figures were measured later, in this
+repository's `test/gas/` suite.
 
 | | Prototype (superseded) | This design |
 |---|---|---|
@@ -532,9 +566,10 @@ estimated — see `scratch/` and the note below.
 | `submitIntent` (L2), first use of a nonce word | — | **150,139** *(measured)* |
 | `commitBid` (L2), subsequent bid | 119,217 | **99,336** *(measured)* |
 | `commitBid` (L2), first bid, opens the auction | — | **143,121** *(measured)* |
-| `settle` per trade (L1), returning user | 42,332 | **~50,000** |
-| `settle` per trade (L1), user's first trade | — | **~67,000** |
-| vs. direct swap (138,735) | −69% | **−64%** / −52% first |
+| `settle` per trade (L1), returning user | 42,332 | **48,044** *(measured)* |
+| `settle` per trade (L1), user's first trade | — | **65,518** *(measured)* |
+| `settle` per trade (L1), first trade *in that token* | — | **82,146** *(measured)* |
+| vs. direct swap (138,735) | −69% | **−65%** / −53% first *(measured)* |
 | Payload | 166.6 B/trade | ~54 B/trade packed, see below |
 
 **The earlier estimates in this section were wrong, and low.** They were derived from storage-slot
@@ -566,6 +601,20 @@ dominates, not `ecrecover`. In money at ETH $2,490 and L1 at 0.256 gwei, that is
 per trade — against roughly $232 of price improvement on a netted 1 ETH order in a thin pool. **The
 gas discussion is not decision-relevant** except for small orders in deep pools, where there is little
 to win either way.
+
+**The estimates above held, and the table was one row short.** `testGasSettleAcrossBatchSizes` in
+`test/gas/BatchScaling.t.sol` measures `settle` at n = 1, 2, 4, 8, 16, 32, 64 and takes the marginal
+cost across the 2 → 64 span, which averages out the constant overhead of the interaction block and
+the restore loop. The returning-user figure came in at **48,044** against an estimated ~50,000, and
+the first-trade figure at **65,518** against ~67,000 — both within 4%. The difference between them,
+**17,474**, is the nonce word alone against the 17,100 this table predicts for it, within 2%.
+
+What the table does not carry is that a settlement has a *second* cold slot per user: the recipient's
+balance in the token they are buying, which `_pay` writes. A user who is new to the protocol and new
+to the token pays both, at **82,146** per trade — 16,628 above the first-trade figure and outside
+anything §11 previously contemplated. It is not a defect in the design and there is nothing to fix in
+`Executor`; it is the ordinary cost of an ERC-20 balance going from zero, and it is listed now because
+a first-trade figure that silently assumed a warm one understated the worst case by a quarter.
 
 Cost of competing is **flat, and independent of batch size** — a commitment is a hash and a number.
 Losing an auction no longer costs a solver in proportion to the solution they built (G5).

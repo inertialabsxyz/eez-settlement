@@ -4,3 +4,17 @@ out = "out"
 libs = ["lib"]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+# `forge snapshot` is only a useful diff if it reproduces, and fuzz and invariant
+# gas figures are means over randomly chosen inputs. This profile pins the seed
+# for that one purpose:
+#
+#     FOUNDRY_PROFILE=snapshot forge snapshot
+#
+# The default profile is left unseeded on purpose, so plain `forge test` keeps
+# exploring new inputs on every run.
+[profile.snapshot.fuzz]
+seed = "0xEE20000000000000000000000000000000000000000000000000000000000001"
+
+[profile.snapshot.invariant]
+fail_on_revert = false
