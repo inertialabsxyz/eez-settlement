@@ -5,6 +5,8 @@
   "description": "Demo-only. A swarm of users and competing solvers against a live EEZ devnet. Not covered by `forge test`; see demo/README.md.",
   "scripts": {
     "parity": "tsx src/parity.ts",
+    "doctor": "tsx src/doctor.ts",
+    "quotes": "tsx src/quotes.ts",
     "swarm": "tsx src/swarm.ts"
   },
   "dependencies": {
