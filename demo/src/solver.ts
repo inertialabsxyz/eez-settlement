@@ -20,10 +20,12 @@ const HORIZON = 600
 /// How many intents a solver will put in one batch.
 ///
 /// Not a protocol limit -- `Book` caps bids at 64, not trades -- but a payload
-/// bound. Every trade adds ~167 bytes of cross-chain calldata and a pass through
-/// `_validateAndScore` on L2 and `_verifyAndPull`, `_pay` and `_restore` on L1.
-/// An unbounded batch over a busy book is a 20KB dispatch, and §11's figures
-/// stop at n=64.
+/// bound. Every trade adds **416 bytes** of cross-chain calldata (measured, by
+/// encoding `revealAndExecute` at n and n+1: 224 for the `Trade` per §11, 32 for
+/// its intent id, and 160 for the signature element including its offset and
+/// length words) and a pass through `_validateAndScore` on L2 and
+/// `_verifyAndPull`, `_pay` and `_restore` on L1. An unbounded batch over a busy
+/// book is a 27KB dispatch at n=64, where §11's figures stop.
 ///
 /// Freshest-first, and deterministic, so every solver in the field is competing
 /// over the same intents rather than over different ones.

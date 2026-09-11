@@ -60,10 +60,12 @@ time wins every auction and settles none, so every auction needs a skip and
 nothing else in the demo ever gets shown.
 
 A batch is capped at 12 intents. That is not a protocol limit — `Book` caps bids
-at 64, not trades — but every trade adds ~167 bytes of cross-chain calldata and a
-pass through `_validateAndScore` on L2 and `_verifyAndPull`, `_pay` and
-`_restore` on L1. Uncapped over a busy book it is a 20KB dispatch, and §11's
-figures stop at n=64.
+at 64, not trades — but every trade adds **416 bytes** of cross-chain calldata
+(*measured*, by encoding `revealAndExecute` at n and n+1: 224 for the `Trade`
+itself per §11, 32 for its intent id, and 160 for the signature element including
+its offset and length words) and a pass through `_validateAndScore` on L2 and
+`_verifyAndPull`, `_pay` and `_restore` on L1. Uncapped over a busy book it is a
+27KB dispatch at n=64, where §11's figures stop.
 
 ## A measured run
 
