@@ -43,7 +43,7 @@ and what they will claim. A win should be legible, not a number.
 | `venues` | Compares A, B and OTC; no hops | The DAI route wins, which it does at small size |
 | `router` | Full path-finding | Rarely; this is the baseline good solver |
 | `stale` | Full path-finding, 90s stale quotes | The noise trader moves prices under it |
-| `greedy` | Full path-finding, over-claims 15% | Always, at reveal |
+| `greedy` | Full path-finding, over-claims 15% on 40% of auctions | Always, on the auctions it inflates |
 
 `stale` is why the noise trader exists. Against static pools it ties with
 `router` every round and the competition is decoration; only drifting prices make
@@ -54,6 +54,16 @@ cannot check — that is precisely what sealing costs — and then dies at revea
 `ScoreOverclaimed`, having paid gas for nothing. §7.2 argues from exactly this
 that the auction needs no bond, and it is the only thing that ever makes
 `skipLeader` execute.
+
+It inflates only 40% of its bids on purpose. A solver that over-claims every
+time wins every auction and settles none, so every auction needs a skip and
+nothing else in the demo ever gets shown.
+
+A batch is capped at 12 intents. That is not a protocol limit — `Book` caps bids
+at 64, not trades — but every trade adds ~167 bytes of cross-chain calldata and a
+pass through `_validateAndScore` on L2 and `_verifyAndPull`, `_pay` and
+`_restore` on L1. Uncapped over a busy book it is a 20KB dispatch, and §11's
+figures stop at n=64.
 
 ## The market
 
@@ -113,6 +123,19 @@ replacing each stuck nonce individually at about one every thirty seconds.
 be accepted, return a hash, change L2 state and then unwind on both chains. The
 front's nonce advances ahead of L1 being readable, so it is a "no longer in
 flight" signal and nothing stronger.
+
+**One cross-chain reveal per solver at a time.** The front reserves *two* nonces
+per cross-chain transaction and does not advance them until the call has settled
+on both chains. A solver that wins two auctions and reveals both at once reads
+the same nonce twice; the second comes back `replacement underpriced`, which
+reads exactly like a reverted reveal even though it was never sent.
+
+**Scan intents incrementally.** Intents are append-only and their terms never
+change, so re-reading every log from block 0 each round is pure waste — and it
+grows. At 190 intents it was ~400 sequential RPC calls per solver per round,
+enough that a round outlasted the 60s commit window and the whole field stopped
+bidding. Solvers now cache the log scan and state-check only as many as a batch
+can hold.
 
 ## Why the encoding is checked
 

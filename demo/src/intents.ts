@@ -74,40 +74,78 @@ export async function submitIntent(account: any, terms: IntentTerms, signature: 
   })
 }
 
-/// Every intent still available to a solver: LIVE, unexpired, and with no
-/// cancellation due before the auction could end.
+type Known = { id: bigint; account: Address; intent: any; signature: Hex }
+
+/// Intents are append-only and their terms never change, so the log scan is
+/// incremental. Re-reading from block 0 each round cost ~400 sequential RPC
+/// calls at 190 intents and grew from there, until a solver's round outlasted
+/// the commit window and the field stopped bidding altogether.
+const known: Known[] = []
+let scannedTo = -1n
+
+async function scan() {
+  const head = await l2.getBlockNumber()
+  if (scannedTo >= head) return
+  const logs = await l2.getLogs({ address: D.BOOK, event: INTENT_SUBMITTED, fromBlock: scannedTo + 1n, toBlock: head })
+  for (const log of logs) {
+    const { id, intent, signature } = log.args as any
+    known.push({ id, account: intent.account, intent, signature })
+  }
+  scannedTo = head
+}
+
+/// The `want` freshest intents a solver may still use: LIVE, unexpired, and with
+/// no cancellation due before the auction could end.
 ///
 /// The cancellation filter is not optional. §6: a solver reads
 /// `cancelEffectiveAt` when building a batch and includes only intents whose
 /// cancellation cannot land before their auction ends, because a reveal covering
 /// one reverts `CancelPending` and loses the whole settlement.
-export async function liveIntents(horizon: number): Promise<LiveIntent[]> {
-  const logs = await l2.getLogs({ address: D.BOOK, event: INTENT_SUBMITTED, fromBlock: 0n, toBlock: 'latest' })
+///
+/// Walks newest-first and stops once it has enough, so the state reads are
+/// bounded by what a batch can hold rather than by how long the demo has run.
+export async function liveIntents(horizon: number, want: number): Promise<LiveIntent[]> {
+  await scan()
   const now = Number((await l2.getBlock({ blockTag: 'latest' })).timestamp)
 
   const out: LiveIntent[] = []
-  for (const log of logs) {
-    const { id, intent, signature } = log.args as any
-    const [, , , , state] = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'intents', args: [id] })) as any[]
-    if (Number(state) !== LIVE) continue
-    if (Number(intent.deadline) <= now + horizon) continue
+  for (let i = known.length - 1; i >= 0 && out.length < want; i--) {
+    const k = known[i]
+    if (Number(k.intent.deadline) <= now + horizon) continue
 
-    const cancelAt = Number(await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'cancelEffectiveAt', args: [id] }))
+    const [, , , , state] = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'intents', args: [k.id] })) as any[]
+    if (Number(state) !== LIVE) continue
+
+    const cancelAt = Number(await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'cancelEffectiveAt', args: [k.id] }))
     if (cancelAt !== 0 && cancelAt <= now + horizon) continue
 
     out.push({
-      id,
-      account: intent.account,
-      sell: symbolOf(intent.sellToken),
-      buy: symbolOf(intent.buyToken),
-      sellAmount: intent.sellAmount,
-      limit: intent.limit,
-      deadline: intent.deadline,
-      nonce: intent.nonce,
-      signature,
+      id: k.id,
+      account: k.intent.account,
+      sell: symbolOf(k.intent.sellToken),
+      buy: symbolOf(k.intent.buyToken),
+      sellAmount: k.intent.sellAmount,
+      limit: k.intent.limit,
+      deadline: k.intent.deadline,
+      nonce: k.intent.nonce,
+      signature: k.signature,
     })
   }
   return out
+}
+
+/// Are all of these still LIVE?
+///
+/// A commitment is sealed over a fixed intent set, so a solver that wins cannot
+/// rebuild. If a competing auction settled any of them first, the reveal reverts
+/// `NotLive` -- and waiting 150s to discover that keeps the solver out of the
+/// next auction for no reason.
+export async function stillLive(ids: bigint[]): Promise<boolean> {
+  for (const id of ids) {
+    const [, , , , state] = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'intents', args: [id] })) as any[]
+    if (Number(state) !== LIVE) return false
+  }
+  return true
 }
 
 /// L1 is authoritative on nonces (I10); Book's bitmap is a courtesy mirror. A

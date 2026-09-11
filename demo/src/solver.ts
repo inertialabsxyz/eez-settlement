@@ -5,7 +5,7 @@ import { l2, sendToFront, frontNonce, l2Now, sleep, wallet } from './chain.js'
 import * as abi from './abi.js'
 import { D, cfg } from './config.js'
 import { snapshot, type Market } from './venues.js'
-import { liveIntents } from './intents.js'
+import { liveIntents, stillLive } from './intents.js'
 import { buildBatch, type Strategy } from './batch.js'
 import { commitment, revealCalldata } from './payload.js'
 import { log, fmtScore } from './log.js'
@@ -126,12 +126,11 @@ export class Solver {
       }
     }
 
-    const all = await liveIntents(HORIZON)
-    if (all.length === 0) {
+    const intents = await liveIntents(HORIZON, MAX_BATCH)
+    if (intents.length === 0) {
       await sleep(2000)
       return
     }
-    const intents = [...all].sort((x, y) => (y.id > x.id ? 1 : -1)).slice(0, MAX_BATCH)
 
     const market = await this.market()
     const deadline = BigInt(now + 3600)
@@ -167,7 +166,7 @@ export class Solver {
     this.bids++
 
     const tag = batch.overclaiming ? ` \x1b[31m(claims ${fmtScore(batch.claimed)}, holds ${fmtScore(batch.score)})\x1b[0m` : ''
-    log(this.strat.name, `bid #${id}: ${batch.matched}/${all.length} intents, score ${fmtScore(batch.claimed)}${tag}  ${batch.routes.join(' | ')}`)
+    log(this.strat.name, `bid #${id}: ${batch.matched} intents, score ${fmtScore(batch.claimed)}${tag}  ${batch.routes.join(' | ')}`)
 
     // Detached on purpose: a reveal takes up to a REVEAL_WINDOW to resolve, and
     // a solver that waited for it could not bid on the next auction. One slow
@@ -236,6 +235,14 @@ export class Solver {
       // The auction died while this reveal was queued: past the hard stop, no
       // leader can still settle it.
       if (now >= a.commitDeadline + 480 || a.leader.toLowerCase() !== this.account.address.toLowerCase()) return
+
+      // A competing auction may have settled these intents while this reveal sat
+      // in the queue. The commitment is sealed over a fixed set, so there is no
+      // rebuilding: the reveal would revert `NotLive` and cost 150s to find out.
+      if (!(await stillLive(batch.intentIds))) {
+        log(this.strat.name, `#${id} abandoned -- another auction took its intents`)
+        return
+      }
 
       const data = revealCalldata(id, batch.d, batch.intentIds, salt, batch.signatures)
       const before = await frontNonce(this.account.address)
