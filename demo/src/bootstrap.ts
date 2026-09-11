@@ -47,12 +47,18 @@ const w = wallet(deployer, 'l1')
 /// Submit at most this many transactions from one account before waiting for
 /// them to mine.
 ///
-/// Not a politeness. Firing ~120 transactions from a single sender at this L1
-/// left 117 of them permanently unmineable: accepted by the node, counted in
-/// `eth_getTransactionCount(pending)` forever, and never included in a block,
-/// which wedges every later nonce from that account behind them. Bursts of ten
-/// are fine; the whole batch at once is not. Recovering means replacing each
-/// stuck nonce individually at roughly one every thirty seconds.
+/// Added after ~120 transactions from a single sender at this L1 appeared to
+/// leave 117 of them permanently unmineable -- accepted by the node, counted in
+/// `eth_getTransactionCount(pending)` forever, never included in a block, and
+/// wedging every later nonce from that account behind them.
+///
+/// **That diagnosis is unproven.** The devnet's block builder can stop bidding
+/// altogether, after which no L1 transaction from anyone is included and the
+/// symptom is indistinguishable; the test that seemed to confirm the flooding
+/// theory merely ran during a healthy window. See "Devnet handling" in
+/// demo/README.md, and `npm run doctor`, which checks for the builder failure
+/// first. The batching is cheap and harmless, so it stays; the reasoning behind
+/// it should not be trusted.
 const BATCH = 8
 
 async function drain(who: Address, upTo: number) {

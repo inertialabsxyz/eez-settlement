@@ -148,8 +148,11 @@ export async function stillLive(ids: bigint[]): Promise<boolean> {
   return true
 }
 
-/// L1 is authoritative on nonces (I10); Book's bitmap is a courtesy mirror. A
-/// user picks the next nonce their own L1 bitmap has not spent.
+/// L1 is authoritative on nonces (I10); Book's bitmap is a courtesy mirror that
+/// rejects at submission an intent L1 could never settle. This reads the mirror
+/// rather than `Executor`'s bitmap, because the mirror is the check
+/// `submitIntent` is about to apply -- and it is a superset, since Book marks a
+/// nonce used the moment the intent is accepted.
 export async function nextNonce(who: Address): Promise<bigint> {
   for (let n = 0n; n < 256n; n++) {
     const word = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'nonceUsed', args: [who, 0n] })) as bigint
