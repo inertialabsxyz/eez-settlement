@@ -76,11 +76,17 @@ must be deployed before `Book`, and `setL2Caller` comes last:
 
 ```solidity
 reg  = new TokenRegistry();
-ex   = new Executor(address(new IdEEZ()), 0, windfallRecipient);
+eez  = address(new IdEEZ());
+ex   = new Executor(eez, 0, windfallRecipient);
 rl   = ex.relayer();
-book = new Book(IExecutor(address(ex)), reg, block.chainid);
+book = new Book(eez, address(ex), 0, reg, block.chainid);
 ex.setL2Caller(address(book));
 ```
+
+`Book` takes the **L1 `Executor`**, not the address it dispatches to: it derives the cross-chain
+proxy itself and scopes the EIP-712 domain to the `Executor` (§5.3). Under `IdEEZ` those two are the
+same address, which is why `test/unit/TypesAndRegistry.t.sol` rebuilds `Book` over `ProxyEEZ` — a
+derivation that keeps them apart — for the cases that turn on the difference.
 
 **Setup a test will otherwise silently fail on:** register every token in `TokenRegistry`, call
 `book.setNumeraire(token, true)` for whatever sits at `tokens[0]`, and have every trading account
