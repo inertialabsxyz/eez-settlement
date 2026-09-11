@@ -112,12 +112,30 @@ writes is still unshown — see §13.4 and issue #11.
 `script/README.md` has the full list of ways this stack fails silently. Two of
 them shaped this package:
 
-**Do not flood a sender.** Firing ~120 transactions from one account at the L1
-left 117 permanently unmineable: accepted by the node, counted in
-`eth_getTransactionCount(pending)` forever, never included in a block, and
-wedging every later nonce behind them. Bursts of eight are fine. `bootstrap`
-batches and waits for each batch to mine; recovering from the alternative meant
-replacing each stuck nonce individually at about one every thirty seconds.
+**Check L1 is including transactions at all before debugging anything else.**
+The devnet builds L1 blocks through MEV-Boost, and `eez_l1::submitter` posts
+`postBatch` via `eth_sendBundle` to rbuilder specifically -- not an optional
+path. rbuilder can die with
+
+```
+ERROR rbuilder::roothash::prefetcher: Error while prefetching trie nodes
+      err=Other(Error while updated shared cache: InconsistentProofs
+```
+
+and stop bidding, after which the relay logs `no bid found` every slot, the
+proposer builds empty blocks, and **no L1 transaction from anyone is included**.
+The composer then warns `settlement backlog past 2x the batch cap`, the L2 safe
+head freezes, and every cross-chain reveal fails -- accepted by the front, never
+settled. Two symptoms identify it in seconds: recent L1 blocks all show `txs=0`
+while transactions sit in the pool, and `cast block safe` on L2 stops advancing.
+The only known fix is restarting the enclave, which loses the deployment.
+
+`bootstrap` submits in batches of eight and waits for each to mine. That was
+added after ~120 transactions from one sender appeared to wedge that account
+permanently -- but that diagnosis is **unproven**: the builder failure above
+explains the same symptom, and the batches-of-ten test that seemed to confirm it
+merely ran during a healthy window. The batching is cheap and harmless, so it
+stays; the reasoning behind it should not be trusted.
 
 **Assert on the effect, never on the send.** A cross-chain transaction here can
 be accepted, return a hash, change L2 state and then unwind on both chains. The

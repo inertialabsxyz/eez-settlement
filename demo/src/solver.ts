@@ -61,7 +61,15 @@ async function currentAuction(): Promise<bigint> {
 
 export class Solver {
   private cached: Market | null = null
-  private lastAuction = -1n
+  /// Auctions this solver has already bid on.
+  ///
+  /// Deliberately not "auctions I have looked at". `liveAuction` is simulated,
+  /// not sent, so an auction nobody has bid on yet stays unopened and
+  /// `currentAuction()` keeps returning the same id. A solver that marked an id
+  /// done because it could not build a batch that second would never look at it
+  /// again -- and since the id never advances either, it would never bid again
+  /// at all. That deadlocked the whole field 8 seconds into a run.
+  private bidOn = new Set<string>()
   /// One cross-chain reveal in flight at a time, per solver.
   ///
   /// The front reserves *two* nonces per cross-chain transaction and does not
@@ -100,7 +108,7 @@ export class Solver {
 
   private async round(stop: () => boolean) {
     const id = await currentAuction()
-    if (id === this.lastAuction) {
+    if (this.bidOn.has(String(id))) {
       await sleep(2000)
       return
     }
@@ -119,8 +127,8 @@ export class Solver {
         await sleep(2000)
         return
       }
+      // Too late to commit to this one; wait for it to roll over.
       if (toClose <= 4) {
-        this.lastAuction = id
         await sleep(2000)
         return
       }
@@ -136,8 +144,10 @@ export class Solver {
     const deadline = BigInt(now + 3600)
     const batch = buildBatch(market, intents, this.strat, deadline)
     if (!batch) {
+      // Not final: more intents arrive every few seconds, and a set that cannot
+      // be priced now often can be a moment later.
       log(this.strat.name, `no batch from ${intents.length} intents on #${id}`)
-      this.lastAuction = id
+      await sleep(5000)
       return
     }
 
@@ -162,7 +172,7 @@ export class Solver {
       chain: null,
       account: this.account,
     })
-    this.lastAuction = id
+    this.bidOn.add(String(id))
     this.bids++
 
     const tag = batch.overclaiming ? ` \x1b[31m(claims ${fmtScore(batch.claimed)}, holds ${fmtScore(batch.score)})\x1b[0m` : ''
@@ -228,48 +238,62 @@ export class Solver {
   }
 
   private async reveal(id: bigint, batch: any, salt: Hex) {
-    {
-      const a = await readAuction(id)
-      if (a.settled) return
-      const now = await l2Now()
-      // The auction died while this reveal was queued: past the hard stop, no
-      // leader can still settle it.
-      if (now >= a.commitDeadline + 480 || a.leader.toLowerCase() !== this.account.address.toLowerCase()) return
+    const a = await readAuction(id)
+    if (a.settled) return
 
-      // A competing auction may have settled these intents while this reveal sat
-      // in the queue. The commitment is sealed over a fixed set, so there is no
-      // rebuilding: the reveal would revert `NotLive` and cost 150s to find out.
-      if (!(await stillLive(batch.intentIds))) {
-        log(this.strat.name, `#${id} abandoned -- another auction took its intents`)
-        return
-      }
+    const now = await l2Now()
 
-      const data = revealCalldata(id, batch.d, batch.intentIds, salt, batch.signatures)
-      const before = await frontNonce(this.account.address)
-      log(this.strat.name, `\x1b[1mwon #${id}\x1b[0m -- revealing ${(data.length - 2) / 2}B across the chain boundary`)
+    // I14: a leader may reveal only within [T_C, T_R). Checked here, immediately
+    // before sending, rather than when the reveal was queued.
+    //
+    // This is what kept the field at zero settlements. Reveals queue per solver
+    // and each one used to hold the queue until the auction settled, so a solver
+    // that won several auctions sent its third reveal minutes after that
+    // auction's window had shut -- `RevealWindowClosed`, every time. The failure
+    // then promoted another backlogged solver and the cascade never broke.
+    if (now >= a.revealDeadline) {
+      log(this.strat.name, `#${id} \x1b[90mabandoned -- reveal window closed while queued\x1b[0m`)
+      return
+    }
+    if (a.leader.toLowerCase() !== this.account.address.toLowerCase()) return
 
-      try {
-        await sendToFront(this.account, D.BOOK, data)
-      } catch (e: any) {
-        log(this.strat.name, `\x1b[31mfront rejected the reveal\x1b[0m ${String(e.message).slice(0, 80)}`)
-        this.revealsFailed++
-        return
-      }
+    // A competing auction may have settled these intents while this reveal sat
+    // in the queue. The commitment is sealed over a fixed set, so there is no
+    // rebuilding: the reveal would revert `NotLive`.
+    if (!(await stillLive(batch.intentIds))) {
+      log(this.strat.name, `#${id} \x1b[90mabandoned -- another auction took its intents\x1b[0m`)
+      return
+    }
 
-      // Assert on the effect, never on the send. A cross-chain transaction here
-      // can be accepted, return a hash, change L2 state and then unwind on both
-      // chains; and the front's nonce advances ahead of L1 being readable.
-      const deadline = Date.now() + 150_000
-      for (;;) {
-        await sleep(3000)
-        const now2 = await readAuction(id)
-        if (now2.settled) return // the watcher attributes it from the Executed event
-        if (Date.now() > deadline) {
-          this.revealsFailed++
-          log(this.strat.name, `\x1b[31m#${id} reveal did not land\x1b[0m -- reverted on one of the two chains`)
-          return
-        }
-      }
+    const data = revealCalldata(id, batch.d, batch.intentIds, salt, batch.signatures)
+    const before = await frontNonce(this.account.address)
+    log(this.strat.name, `\x1b[1mwon #${id}\x1b[0m -- revealing ${(data.length - 2) / 2}B across the chain boundary`)
+
+    try {
+      await sendToFront(this.account, D.BOOK, data)
+    } catch (e: any) {
+      log(this.strat.name, `\x1b[31mfront rejected the reveal\x1b[0m ${String(e.message).slice(0, 80)}`)
+      this.revealsFailed++
+      return
+    }
+
+    // Hold the queue only until the send is no longer in flight, not until the
+    // auction settles. The front reserves two nonces per cross-chain call and
+    // does not advance them until it has resolved on both chains, so the nonce
+    // moving is exactly when the next reveal may safely read one. Waiting for
+    // settlement instead is what built the backlog.
+    const deadline = Date.now() + 90_000
+    for (;;) {
+      await sleep(3000)
+      if ((await frontNonce(this.account.address)) > before) break
+      if (Date.now() > deadline) break
+    }
+
+    // Assert on the effect, never on the send: a cross-chain transaction can be
+    // accepted, return a hash, change L2 state and then unwind on both chains.
+    if (!(await readAuction(id)).settled) {
+      this.revealsFailed++
+      log(this.strat.name, `\x1b[31m#${id} reveal did not land\x1b[0m -- reverted on one of the two chains`)
     }
   }
 }

@@ -60,9 +60,17 @@ async function treasury() {
 
 /// `auctionCount` stays 0 while auction 0 is live -- it is the id of the newest
 /// auction, not a tally -- so the watcher keys on the commit deadline instead.
+const EXECUTED = parseAbiItem('event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled)')
+
+/// Settlements from earlier runs are already on chain. Seed the watcher with
+/// them so it reports what this run does, not the history of the deployment.
+const priorExecuted = new Set(
+  (await l2.getLogs({ address: D.BOOK, event: EXECUTED, fromBlock: 0n, toBlock: 'latest' })).map((e) => String((e.args as any).auctionId)),
+)
+
 const auctionWatcher = (async () => {
   let seen = ''
-  const reported = new Set<string>()
+  const reported = new Set<string>(priorExecuted)
   while (!stopped) {
     try {
       const id = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'auctionCount' })) as bigint
@@ -73,12 +81,7 @@ const auctionWatcher = (async () => {
         log('auction', `#${id} open, T_C in ${Number(a[4]) - now}s`)
         seen = key
       }
-      for (const e of await l2.getLogs({
-        address: D.BOOK,
-        event: parseAbiItem('event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled)'),
-        fromBlock: 0n,
-        toBlock: 'latest',
-      })) {
+      for (const e of await l2.getLogs({ address: D.BOOK, event: EXECUTED, fromBlock: 0n, toBlock: 'latest' })) {
         const a = e.args as any
         const key2 = `${a.auctionId}`
         if (reported.has(key2)) continue
@@ -114,12 +117,9 @@ console.log()
 /// Wins are attributed from `Executed`, not self-reported. Several solvers each
 /// watch the auction settle and would all claim it otherwise -- and after a
 /// `skipLeader` the solver that revealed is not the one that first led.
-const executed = await l2.getLogs({
-  address: D.BOOK,
-  event: parseAbiItem('event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled)'),
-  fromBlock: 0n,
-  toBlock: 'latest',
-})
+const executed = (await l2.getLogs({ address: D.BOOK, event: EXECUTED, fromBlock: 0n, toBlock: 'latest' })).filter(
+  (e) => !priorExecuted.has(String((e.args as any).auctionId)),
+)
 const wonBy = new Map<string, number>()
 let filled = 0
 for (const e of executed) {
