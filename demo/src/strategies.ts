@@ -13,6 +13,7 @@ export const STRATEGIES: Strategy[] = [
     venues: ['A'],
     quoteAgeMs: 0,
     overclaimBps: 0,
+    overclaimChance: 0,
     blurb: 'venue A only, no hops',
   },
   {
@@ -21,6 +22,7 @@ export const STRATEGIES: Strategy[] = [
     venues: ['A', 'B', 'OTC'],
     quoteAgeMs: 0,
     overclaimBps: 0,
+    overclaimChance: 0,
     blurb: 'all venues, still no hops',
   },
   {
@@ -29,6 +31,7 @@ export const STRATEGIES: Strategy[] = [
     venues: ['A', 'B', 'OTC'],
     quoteAgeMs: 0,
     overclaimBps: 0,
+    overclaimChance: 0,
     blurb: 'full path-finding',
   },
   {
@@ -40,6 +43,7 @@ export const STRATEGIES: Strategy[] = [
     venues: ['A', 'B', 'OTC'],
     quoteAgeMs: 90_000,
     overclaimBps: 0,
+    overclaimChance: 0,
     blurb: 'full path-finding, 90s stale quotes',
   },
   {
@@ -53,6 +57,7 @@ export const STRATEGIES: Strategy[] = [
     venues: ['A', 'B', 'OTC'],
     quoteAgeMs: 0,
     overclaimBps: 1500,
-    blurb: 'over-claims by 15%, cannot back it',
+    overclaimChance: 0.4,
+    blurb: 'over-claims 15% on 40% of auctions',
   },
 ]

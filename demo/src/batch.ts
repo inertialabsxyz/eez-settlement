@@ -34,6 +34,10 @@ export type Strategy = {
   /// Basis points to inflate the claimed score by. Non-zero is a bid this
   /// solver cannot back at reveal (§7.2).
   overclaimBps: number
+  /// Probability of actually over-claiming on any given auction. A solver that
+  /// over-claims every time wins every auction and settles none, so every
+  /// auction needs a skip and the demo shows nothing else.
+  overclaimChance: number
   blurb: string
 }
 
@@ -45,6 +49,7 @@ export type Batch = {
   claimed: bigint
   routes: string[]
   matched: number
+  overclaiming: boolean
 }
 
 const mulDiv = (a: bigint, b: bigint, c: bigint) => (a * b) / c
@@ -239,7 +244,8 @@ export function buildBatch(
 
   const d: SettlementData = { tokens, clearingPrices: prices, trades, calls }
   const score = scoreOf(d)
-  const claimed = score + (score * BigInt(strat.overclaimBps)) / 10_000n
+  const overclaiming = strat.overclaimBps > 0 && Math.random() < strat.overclaimChance
+  const claimed = overclaiming ? score + (score * BigInt(strat.overclaimBps)) / 10_000n : score
 
-  return { d, intentIds: ids, signatures: sigs, score, claimed, routes, matched }
+  return { d, intentIds: ids, signatures: sigs, score, claimed, routes, matched, overclaiming }
 }

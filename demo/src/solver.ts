@@ -17,6 +17,18 @@ const SALT_BASE = 0x5a17n
 /// it. COMMIT_WINDOW + MAX_REVEAL_PHASE is the longest an auction can live.
 const HORIZON = 600
 
+/// How many intents a solver will put in one batch.
+///
+/// Not a protocol limit -- `Book` caps bids at 64, not trades -- but a payload
+/// bound. Every trade adds ~167 bytes of cross-chain calldata and a pass through
+/// `_validateAndScore` on L2 and `_verifyAndPull`, `_pay` and `_restore` on L1.
+/// An unbounded batch over a busy book is a 20KB dispatch, and §11's figures
+/// stop at n=64.
+///
+/// Freshest-first, and deterministic, so every solver in the field is competing
+/// over the same intents rather than over different ones.
+const MAX_BATCH = 12
+
 type Auction = {
   leadCommitment: Hex
   leader: Address
@@ -50,13 +62,23 @@ async function currentAuction(): Promise<bigint> {
 export class Solver {
   private cached: Market | null = null
   private lastAuction = -1n
-  wins = 0
-  losses = 0
-  failures = 0
+  /// One cross-chain reveal in flight at a time, per solver.
+  ///
+  /// The front reserves *two* nonces per cross-chain transaction and does not
+  /// advance them until the call has settled on both chains. A solver that wins
+  /// two auctions and reveals both at once reads the same nonce twice and the
+  /// front rejects the second as `replacement underpriced` -- which then reads
+  /// like the reveal reverted, when it was never sent.
+  private revealChain: Promise<unknown> = Promise.resolve()
+  bids = 0
+  reveals = 0
+  revealsFailed = 0
 
   constructor(
     readonly strat: Strategy,
     readonly account: any,
+    /// Position in the field, used only to stagger `skipLeader`.
+    readonly index: number,
   ) {}
 
   private async market(): Promise<Market> {
@@ -85,31 +107,37 @@ export class Solver {
 
     const a = await readAuction(id)
     const now = await l2Now()
-    const toClose = a.commitDeadline - now
 
-    // Bid late enough to see the auction's whole intent set, early enough that
-    // the commit still lands before T_C. Staggered per solver so the race is
-    // visible rather than simultaneous.
-    if (toClose > 22) {
-      await sleep(2000)
-      return
-    }
-    if (toClose <= 4) {
-      this.lastAuction = id
-      await sleep(2000)
-      return
+    // `commitDeadline == 0` means nobody has opened this auction yet. Opening is
+    // lazy and happens inside `commitBid`, so the first solver to bid opens it
+    // -- there is nothing to wait for and waiting deadlocks the whole field.
+    if (a.commitDeadline !== 0) {
+      const toClose = a.commitDeadline - now
+      // Bid late enough to see the auction's whole intent set, early enough that
+      // the commit still lands before T_C.
+      if (toClose > 22) {
+        await sleep(2000)
+        return
+      }
+      if (toClose <= 4) {
+        this.lastAuction = id
+        await sleep(2000)
+        return
+      }
     }
 
-    const intents = await liveIntents(HORIZON)
-    if (intents.length === 0) {
+    const all = await liveIntents(HORIZON)
+    if (all.length === 0) {
       await sleep(2000)
       return
     }
+    const intents = [...all].sort((x, y) => (y.id > x.id ? 1 : -1)).slice(0, MAX_BATCH)
 
     const market = await this.market()
     const deadline = BigInt(now + 3600)
     const batch = buildBatch(market, intents, this.strat, deadline)
     if (!batch) {
+      log(this.strat.name, `no batch from ${intents.length} intents on #${id}`)
       this.lastAuction = id
       return
     }
@@ -136,11 +164,15 @@ export class Solver {
       account: this.account,
     })
     this.lastAuction = id
+    this.bids++
 
-    const tag = this.strat.overclaimBps > 0 ? ` \x1b[31m(claims ${fmtScore(batch.claimed)}, holds ${fmtScore(batch.score)})\x1b[0m` : ''
-    log(this.strat.name, `bid on #${id}: ${batch.matched} intents, score ${fmtScore(batch.claimed)}${tag}  ${batch.routes.join(' | ')}`)
+    const tag = batch.overclaiming ? ` \x1b[31m(claims ${fmtScore(batch.claimed)}, holds ${fmtScore(batch.score)})\x1b[0m` : ''
+    log(this.strat.name, `bid #${id}: ${batch.matched}/${all.length} intents, score ${fmtScore(batch.claimed)}${tag}  ${batch.routes.join(' | ')}`)
 
-    await this.settle(id, batch, salt, stop)
+    // Detached on purpose: a reveal takes up to a REVEAL_WINDOW to resolve, and
+    // a solver that waited for it could not bid on the next auction. One slow
+    // reveal would then stall the whole field.
+    void this.settle(id, batch, salt, stop).catch(() => {})
   }
 
   /// Wait out the commit phase, then either reveal or watch.
@@ -165,19 +197,45 @@ export class Solver {
         // Not the leader. Watch, and if the leader wins and goes quiet, promote
         // the next candidate -- permissionless, because the effect is fixed at
         // commit time.
-        if (now >= a.revealDeadline) {
+        // Staggered by position in the field, not jittered.
+        //
+        // Every losing solver wants this call and all become eligible in the
+        // same second. Random jitter is not enough: the first skip's extension
+        // of `revealDeadline` takes a block to land, so the others still
+        // simulate successfully against pre-skip state and all of them go
+        // through. Five skips burn five candidates and kill the auction. A
+        // deterministic stagger means only one solver is due at a time.
+        if (now >= a.revealDeadline + this.index * 14) {
           try {
-            await wallet(this.account, 'l2').writeContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'skipLeader', args: [id], chain: null, account: this.account })
+            const { request } = await l2.simulateContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'skipLeader', args: [id], account: this.account })
+            const hash = await wallet(this.account, 'l2').writeContract(request as any)
+            await l2.waitForTransactionReceipt({ hash, timeout: 30_000 })
             log(this.strat.name, `\x1b[33mskipLeader(#${id})\x1b[0m -- leader went quiet, promoting the next bid`)
           } catch {
             /* another solver got there first, or the auction is dead */
           }
         }
-        this.losses++
         await sleep(3000)
         if ((await readAuction(id)).settled) return
         continue
       }
+
+      this.reveals++
+      // Queue behind any reveal this solver already has in flight.
+      const mine = this.revealChain.then(() => this.reveal(id, batch, salt))
+      this.revealChain = mine.catch(() => {})
+      return mine
+    }
+  }
+
+  private async reveal(id: bigint, batch: any, salt: Hex) {
+    {
+      const a = await readAuction(id)
+      if (a.settled) return
+      const now = await l2Now()
+      // The auction died while this reveal was queued: past the hard stop, no
+      // leader can still settle it.
+      if (now >= a.commitDeadline + 480 || a.leader.toLowerCase() !== this.account.address.toLowerCase()) return
 
       const data = revealCalldata(id, batch.d, batch.intentIds, salt, batch.signatures)
       const before = await frontNonce(this.account.address)
@@ -187,7 +245,7 @@ export class Solver {
         await sendToFront(this.account, D.BOOK, data)
       } catch (e: any) {
         log(this.strat.name, `\x1b[31mfront rejected the reveal\x1b[0m ${String(e.message).slice(0, 80)}`)
-        this.failures++
+        this.revealsFailed++
         return
       }
 
@@ -198,14 +256,10 @@ export class Solver {
       for (;;) {
         await sleep(3000)
         const now2 = await readAuction(id)
-        if (now2.settled) {
-          this.wins++
-          log('settle', `\x1b[32m#${id} settled by ${this.strat.name}\x1b[0m -- ${batch.matched} intents, score ${fmtScore(batch.score)}`)
-          return
-        }
+        if (now2.settled) return // the watcher attributes it from the Executed event
         if (Date.now() > deadline) {
-          this.failures++
-          log(this.strat.name, `\x1b[31m#${id} never settled\x1b[0m -- reveal reverted on one of the two chains`)
+          this.revealsFailed++
+          log(this.strat.name, `\x1b[31m#${id} reveal did not land\x1b[0m -- reverted on one of the two chains`)
           return
         }
       }

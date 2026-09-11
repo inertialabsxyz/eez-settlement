@@ -15,13 +15,14 @@ import { Solver } from './solver.js'
 import { NoiseTrader } from './noise.js'
 import { User } from './user.js'
 import { log, fmt, fmtScore } from './log.js'
+import { parseAbiItem } from 'viem'
 
 const MINUTES = Number(process.argv[2] ?? 10)
 const USER_EVERY = 25_000
 const NOISE_EVERY = 20_000
 
 const users = USER_INDICES.map((i, n) => new User(account(i), `u${n}`))
-const solvers = STRATEGIES.map((s, n) => new Solver(s, account(SOLVER_INDICES[n])))
+const solvers = STRATEGIES.map((s, n) => new Solver(s, account(SOLVER_INDICES[n]), n))
 const noise = new NoiseTrader(account(NOISE_INDEX))
 
 let stopped = false
@@ -57,16 +58,33 @@ async function treasury() {
   return out.length ? out.join('  ') : 'nothing yet'
 }
 
+/// `auctionCount` stays 0 while auction 0 is live -- it is the id of the newest
+/// auction, not a tally -- so the watcher keys on the commit deadline instead.
 const auctionWatcher = (async () => {
-  let seen = -1n
+  let seen = ''
+  const reported = new Set<string>()
   while (!stopped) {
     try {
       const id = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'auctionCount' })) as bigint
-      if (id !== seen) {
-        const a = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'auctions', args: [id] })) as any[]
+      const a = (await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'auctions', args: [id] })) as any[]
+      const key = `${id}:${a[4]}`
+      if (key !== seen && Number(a[4]) > 0) {
         const now = await l2Now()
-        if (Number(a[4]) > 0) log('auction', `#${id} open, T_C in ${Number(a[4]) - now}s`)
-        seen = id
+        log('auction', `#${id} open, T_C in ${Number(a[4]) - now}s`)
+        seen = key
+      }
+      for (const e of await l2.getLogs({
+        address: D.BOOK,
+        event: parseAbiItem('event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled)'),
+        fromBlock: 0n,
+        toBlock: 'latest',
+      })) {
+        const a = e.args as any
+        const key2 = `${a.auctionId}`
+        if (reported.has(key2)) continue
+        reported.add(key2)
+        const who = solvers.find((s) => s.account.address.toLowerCase() === String(a.solver).toLowerCase())
+        log('settle', `\x1b[32m#${a.auctionId} settled by ${who?.strat.name ?? a.solver}\x1b[0m -- ${a.filled} intents, score ${fmtScore(a.score)}`)
       }
     } catch {
       /* transient */
@@ -93,9 +111,31 @@ console.log(`  intents submitted   ${users.reduce((n, u) => n + u.submitted, 0)}
 console.log(`  noise trades        ${noise.trades}`)
 console.log(`  auctions            ${await l2.readContract({ address: D.BOOK, abi: abi.BOOK, functionName: 'auctionCount' })}`)
 console.log()
-console.log(`  ${'solver'.padEnd(9)}${'won'.padStart(5)}${'lost'.padStart(6)}${'failed'.padStart(8)}   strategy`)
+/// Wins are attributed from `Executed`, not self-reported. Several solvers each
+/// watch the auction settle and would all claim it otherwise -- and after a
+/// `skipLeader` the solver that revealed is not the one that first led.
+const executed = await l2.getLogs({
+  address: D.BOOK,
+  event: parseAbiItem('event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled)'),
+  fromBlock: 0n,
+  toBlock: 'latest',
+})
+const wonBy = new Map<string, number>()
+let filled = 0
+for (const e of executed) {
+  const who = String((e.args as any).solver).toLowerCase()
+  wonBy.set(who, (wonBy.get(who) ?? 0) + 1)
+  filled += Number((e.args as any).filled)
+}
+
+console.log(`  settlements         ${executed.length}   (${filled} intents filled)`)
+console.log()
+console.log(`  ${'solver'.padEnd(9)}${'bids'.padStart(6)}${'won'.padStart(5)}${'reveals'.padStart(9)}${'failed'.padStart(8)}   strategy`)
 for (const s of solvers) {
-  console.log(`  ${s.strat.name.padEnd(9)}${String(s.wins).padStart(5)}${String(s.losses).padStart(6)}${String(s.failures).padStart(8)}   ${s.strat.blurb}`)
+  const won = wonBy.get(s.account.address.toLowerCase()) ?? 0
+  console.log(
+    `  ${s.strat.name.padEnd(9)}${String(s.bids).padStart(6)}${String(won).padStart(5)}${String(s.reveals).padStart(9)}${String(s.revealsFailed).padStart(8)}   ${s.strat.blurb}`,
+  )
 }
 console.log(`\n  residue swept to windfallRecipient (I17):  ${await treasury()}`)
 
