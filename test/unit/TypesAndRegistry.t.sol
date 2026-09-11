@@ -2,7 +2,7 @@
 pragma solidity ^0.8.28;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
-import {SettlementFixture} from "../helpers/SettlementFixture.sol";
+import {SettlementFixture, ProxyEEZ} from "../helpers/SettlementFixture.sol";
 import {Book, IExecutor} from "../../src/Book.sol";
 import {Executor} from "../../src/Executor.sol";
 import {Trade, Interaction, SettlementData, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
@@ -75,7 +75,7 @@ contract TypesAndRegistryTest is SettlementFixture {
     /// with `block.chainid`, which cannot distinguish the two — so this deploys
     /// one against a foreign L1 to make the pin observable.
     function testDomainSeparatorPinnedToL1ChainIdNotBooksOwn() public {
-        Book foreign = new Book(IExecutor(address(ex)), reg, FOREIGN_L1);
+        Book foreign = new Book(eez, address(ex), 0, reg, FOREIGN_L1);
 
         assertEq(foreign.domainSeparator(), _handBuiltDomain(FOREIGN_L1, address(ex)));
         assertTrue(
@@ -87,11 +87,60 @@ contract TypesAndRegistryTest is SettlementFixture {
     /// §5.3: the signature is consumed on L1, so `verifyingContract` is
     /// `Executor` — never `Book`, which only checks it to fail fast.
     function testDomainSeparatorPinnedToExecutorNotBook() public {
-        Book foreign = new Book(IExecutor(address(ex)), reg, FOREIGN_L1);
+        Book foreign = new Book(eez, address(ex), 0, reg, FOREIGN_L1);
 
         assertTrue(
             foreign.domainSeparator() != _handBuiltDomain(FOREIGN_L1, address(foreign)),
             "Book pinned the domain to itself instead of Executor"
+        );
+    }
+
+    /// §5.3: `verifyingContract` is the **L1 `Executor`** — the contract that
+    /// consumes the signature — and not the cross-chain proxy `Book` dispatches
+    /// to. Those are two different addresses on a real bridge; the fixture's
+    /// `IdEEZ` collapses them, so this rebuilds `Book` over a derivation that
+    /// keeps them apart.
+    ///
+    /// Without this case a `Book` that scoped the domain to its dispatch target
+    /// passed every suite here and rejected nothing, while every settlement it
+    /// produced died on L1 with `BadSignature(0)` — silent on L2, fatal after
+    /// the batch had already crossed.
+    function testDomainSeparatorPinnedToL1ExecutorNotItsCrossChainProxy() public {
+        address realEez = address(new ProxyEEZ());
+        Executor l1Ex = new Executor(realEez, 0, windfall);
+        Book b = new Book(realEez, address(l1Ex), 0, reg, block.chainid);
+
+        assertTrue(
+            address(b.executor()) != b.l1Executor(),
+            "ProxyEEZ did not derive a distinct proxy; this test proves nothing"
+        );
+        assertEq(b.l1Executor(), address(l1Ex), "Book did not record the L1 Executor");
+
+        // The check that matters: the two chains agree on what was signed.
+        assertEq(
+            b.domainSeparator(),
+            l1Ex.domainSeparator(),
+            "Book's domain does not match the Executor that consumes the signature"
+        );
+        assertEq(b.domainSeparator(), _handBuiltDomain(block.chainid, address(l1Ex)));
+        assertTrue(
+            b.domainSeparator() != _handBuiltDomain(block.chainid, address(b.executor())),
+            "Book scoped the domain to its cross-chain proxy instead of the L1 Executor"
+        );
+    }
+
+    /// The other half of the same derivation: `Book` dispatches to the proxy,
+    /// not to the L1 address. A `Book` holding the raw L1 address would emit a
+    /// call to an account with no code on L2.
+    function testBookDispatchesToTheCrossChainProxy() public {
+        address realEez = address(new ProxyEEZ());
+        Executor l1Ex = new Executor(realEez, 0, windfall);
+        Book b = new Book(realEez, address(l1Ex), 0, reg, block.chainid);
+
+        assertEq(
+            address(b.executor()),
+            ProxyEEZ(realEez).computeCrossChainProxyAddress(address(l1Ex), 0),
+            "Book did not dispatch to the derived cross-chain proxy"
         );
     }
 
