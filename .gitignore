@@ -18,3 +18,8 @@ docs/
 .env
 .env.*
 !.env.example
+
+# Devnet harness: prebuilt Uniswap artefacts, and the addresses of a run
+node_modules/
+package-lock.json
+script/deployments.env

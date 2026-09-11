@@ -6,7 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {TokenRegistry} from "../../src/TokenRegistry.sol";
 import {Executor} from "../../src/Executor.sol";
 import {Relayer} from "../../src/Relayer.sol";
-import {Book, IExecutor} from "../../src/Book.sol";
+import {Book} from "../../src/Book.sol";
 import {SettlementData, Trade, Interaction, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
 
 /// An EEZ whose cross-chain proxy derivation is the identity, so that `Book`
@@ -14,9 +14,25 @@ import {SettlementData, Trade, Interaction, SignedIntent, SettlementEIP712} from
 /// single-chain test. The real bridge derives a distinct address; nothing under
 /// test depends on which address it is, only that `settle` rejects every other
 /// caller (§9, I19).
+///
+/// The identity is a convenience with a cost: it collapses `Book`'s two distinct
+/// L1-facing addresses — the proxy it dispatches to, and the `Executor` its
+/// signing domain is scoped to — into one, so no suite built on this fixture can
+/// tell them apart. `ProxyEEZ` below derives them apart, and
+/// `test/unit/TypesAndRegistry.t.sol` uses it for exactly that.
 contract IdEEZ {
     function computeCrossChainProxyAddress(address t, uint64) external pure returns (address) {
         return t;
+    }
+}
+
+/// An EEZ that derives a proxy address distinct from its target, which is what
+/// the real bridge does — on the devnet, target `0x…DeaDBeef` derives to
+/// `0x0c88…80d0`. Nothing depends on the derivation being EEZ's actual one, only
+/// on `proxy != target`.
+contract ProxyEEZ {
+    function computeCrossChainProxyAddress(address t, uint64 rollupId) external pure returns (address) {
+        return address(uint160(uint256(keccak256(abi.encode(t, rollupId)))));
     }
 }
 
@@ -36,6 +52,7 @@ contract Tok is ERC20 {
 /// file.
 abstract contract SettlementFixture is Test {
     TokenRegistry reg;
+    address eez;
     Executor ex;
     Relayer rl;
     Book book;
@@ -67,9 +84,10 @@ abstract contract SettlementFixture is Test {
         // its own constructor, so it precedes `Book`, and `setL2Caller` — which
         // resolves and caches the proxy — comes last.
         reg = new TokenRegistry();
-        ex = new Executor(address(new IdEEZ()), 0, windfall);
+        eez = address(new IdEEZ());
+        ex = new Executor(eez, 0, windfall);
         rl = ex.relayer();
-        book = new Book(IExecutor(address(ex)), reg, block.chainid);
+        book = new Book(eez, address(ex), 0, reg, block.chainid);
         ex.setL2Caller(address(book));
 
         // An unregistered token has no id and `Book._idOf` reverts UnknownToken.

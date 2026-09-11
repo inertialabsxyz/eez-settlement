@@ -9,6 +9,13 @@ interface IExecutor {
     function settle(SettlementData calldata d, bytes[] calldata signatures) external;
 }
 
+/// Declared here as well as in `Executor`, because each of these files is a
+/// standalone listing. An interface cannot diverge silently the way a computed
+/// value can — a mismatch is a compile error, not a bad settlement.
+interface IEEZ {
+    function computeCrossChainProxyAddress(address target, uint64 rollupId) external view returns (address);
+}
+
 /// The L2 half: intents, a sealed-bid solver auction, and one dispatch to L1.
 ///
 /// Nothing here holds funds, and nothing here can move them. Users keep custody
@@ -20,7 +27,18 @@ contract Book {
     // Configuration
     // ------------------------------------------------------------------
 
+    /// The L1 `Executor`, as deployed. Not reachable from this chain: L2 calls
+    /// reach it through `executor`, its cross-chain proxy. It is held anyway
+    /// because it is the `verifyingContract` of the EIP-712 domain — the
+    /// signature is consumed on L1, so it is scoped to the contract that
+    /// consumes it (§5.3).
+    address public immutable l1Executor;
+
+    /// `l1Executor`'s cross-chain proxy on this chain, and therefore the address
+    /// a settlement is actually dispatched to. Distinct from `l1Executor`; the
+    /// two coincide only under a mock derivation.
     IExecutor public immutable executor;
+
     TokenRegistry public immutable registry;
     address public immutable admin;
 
@@ -139,11 +157,26 @@ contract Book {
     event LeaderSkipped(uint256 indexed auctionId, address indexed solver);
     event Executed(uint256 indexed auctionId, address indexed solver, uint256 score, uint256 filled);
 
-    constructor(IExecutor _executor, TokenRegistry _registry, uint256 l1ChainId) {
-        executor = _executor;
+    /// @param eez The EEZ system contract on this L2.
+    /// @param _l1Executor The L1 `Executor`, as deployed. Both the dispatch
+    /// target and the signing domain are derived from it.
+    /// @param l1RollupId `Executor`'s rollup id as seen from this chain.
+    ///
+    /// The proxy is derived rather than supplied, for the same reason the domain
+    /// is computed rather than supplied. The address a settlement is dispatched
+    /// to and the address a signature is scoped to are two different addresses,
+    /// and taking both as parameters lets a deployment supply one where the
+    /// other belongs: a book that accepts signatures L1 then rejects, silent on
+    /// L2 and fatal after the batch has already crossed (§5.3). Deriving both
+    /// from one input makes that unexpressible.
+    constructor(address eez, address _l1Executor, uint64 l1RollupId, TokenRegistry _registry, uint256 l1ChainId) {
+        l1Executor = _l1Executor;
+        address proxy = IEEZ(eez).computeCrossChainProxyAddress(_l1Executor, l1RollupId);
+        require(proxy != address(0), "bad proxy");
+        executor = IExecutor(proxy);
         registry = _registry;
         admin = msg.sender;
-        domainSeparator = SettlementEIP712.domainSeparator(l1ChainId, address(_executor));
+        domainSeparator = SettlementEIP712.domainSeparator(l1ChainId, _l1Executor);
     }
 
     function setNumeraire(address token, bool allowed) external {

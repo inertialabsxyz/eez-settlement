@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "description": "Devnet-only. Prebuilt Uniswap V2 artefacts for script/install-l1.sh, which deploys a real venue on the devnet L1 so a settlement can source liquidity through a solver interaction. Nothing in src/ or test/ depends on these; they never enter the Solidity compile graph.",
+  "dependencies": {
+    "@uniswap/v2-core": "^1.0.1",
+    "@uniswap/v2-periphery": "^1.1.0-beta.0",
+    "canonical-weth": "^1.4.0"
+  }
+}
