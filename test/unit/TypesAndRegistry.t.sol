@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 import {SettlementFixture, ProxyEEZ} from "../helpers/SettlementFixture.sol";
-import {Book, IExecutor} from "../../src/Book.sol";
+import {Book} from "../../src/Book.sol";
 import {Executor} from "../../src/Executor.sol";
 import {Trade, Interaction, SettlementData, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
 import {TokenRegistry} from "../../src/TokenRegistry.sol";

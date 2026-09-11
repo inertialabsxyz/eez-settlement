@@ -6,7 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {TokenRegistry} from "../../src/TokenRegistry.sol";
 import {Executor} from "../../src/Executor.sol";
 import {Relayer} from "../../src/Relayer.sol";
-import {Book, IExecutor} from "../../src/Book.sol";
+import {Book} from "../../src/Book.sol";
 import {SettlementData, Trade, Interaction, SignedIntent, SettlementEIP712} from "../../src/SettlementTypes.sol";
 
 /// An EEZ whose cross-chain proxy derivation is the identity, so that `Book`
