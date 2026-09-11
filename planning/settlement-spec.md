@@ -677,9 +677,23 @@ what is on the list. The token registry is *not* governed — an id is an index,
 3. **`COMMIT_WINDOW` and batching cadence.** Undesigned. §6 shows lazy opening, where the first
    `commitBid` on an unallocated id opens the auction, as a placeholder. A scheduled cadence would
    replace that and nothing else.
-4. **Atomicity under stress is assumed, not shown.** The existing harness passes vacuously — it
-   captures the exit code of the send, not the transaction's outcome. `eez-gotchas.md` §4 gives the
-   hook: the cross-chain front's nonce is the only reliable "settled on both chains" signal.
+4. **Atomicity under stress is assumed, not shown.** *Narrowed, not closed.* `script/e2e.sh` no
+   longer captures the exit code of the send: an auction marked settled on L2 is not accepted until
+   L1 has consumed the nonce that settlement's pull spent, which `Executor` writes only from inside
+   `settle`. Two settlements have landed that way against a live devnet — one batch netting to zero,
+   one routed through a real Uniswap V2 pool — with `Executor` exiting at its opening balance of
+   both tokens in each, and the routed one's residue swept to `windfallRecipient`.
+
+   One correction to what this entry used to claim. **The cross-chain front's nonce is not a
+   reliable "settled on both chains" signal.** It advances ahead of the L1 state becoming readable;
+   a harness that asserted the moment it moved read an L1 that had not caught up and reported six
+   failures for a settlement that had landed correctly. Treat it as "the send is no longer in
+   flight" and nothing stronger, and wait on an L1 fact.
+
+   What is still not shown is the half that matters: that a *failing* L1 leg unwinds the L2 writes.
+   Every settlement observed so far succeeded. Closing this needs a payload that reverts inside
+   `settle` — a bad signature, or a route that cannot meet the limit — and the assertion that the
+   auction is still unsettled and its intents still `Live` afterwards.
 5. **Does direct A↔B matching matter?** §8 forbids a trade without a numeraire leg. If direct
    matching is a product requirement, the rule becomes a reference-price oracle and needs its own
    security review.
