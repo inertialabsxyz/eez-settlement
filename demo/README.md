@@ -52,8 +52,10 @@ caching cost something.
 `greedy` is the interesting one. It wins the auction on a score `commitBid`
 cannot check — that is precisely what sealing costs — and then dies at reveal on
 `ScoreOverclaimed`, having paid gas for nothing. §7.2 argues from exactly this
-that the auction needs no bond, and it is the only thing that ever makes
-`skipLeader` execute.
+that the auction needs no bond. It is the demo's designed source of a skipped
+leader, though not the only one: a winner that abandons its reveal — because the
+window closed while the reveal was queued, or because another auction took its
+intents — goes just as quiet, and `skipLeader` promotes past it the same way.
 
 It inflates only 40% of its bids on purpose. A solver that over-claims every
 time wins every auction and settles none, so every auction needs a skip and

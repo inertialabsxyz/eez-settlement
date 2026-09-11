@@ -50,8 +50,11 @@ export const STRATEGIES: Strategy[] = [
     /// Claims more surplus than its own payload delivers. Wins the auction on
     /// the claim -- `commitBid` cannot check it, that is what sealing costs --
     /// and then dies at reveal on `ScoreOverclaimed`, having paid gas for
-    /// nothing. §7.2: this is why the auction needs no bond, and it is the only
-    /// thing that ever makes `skipLeader` run.
+    /// nothing. §7.2: this is why the auction needs no bond. It is the demo's
+    /// *designed* source of a skipped leader, but not the only one -- a winner
+    /// that abandons its reveal, because the window closed while the reveal was
+    /// queued or because another auction took its intents, leaves the same
+    /// silence and is skipped the same way.
     name: 'greedy',
     hops: ['DAI', 'WBTC', 'WETH'],
     venues: ['A', 'B', 'OTC'],
