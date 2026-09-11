@@ -65,6 +65,35 @@ pass through `_validateAndScore` on L2 and `_verifyAndPull`, `_pay` and
 `_restore` on L1. Uncapped over a busy book it is a 20KB dispatch, and §11's
 figures stop at n=64.
 
+## A measured run
+
+Ten minutes on `eez-dev`: 197 intents submitted, 21 noise trades, 9 auctions,
+**6 settlements filling 33 intents**. `Executor` ended empty (I11) and
+714.85 USDC / 0.0271 WETH / 62.74 DAI / 0.0092 WBTC of residue reached
+`windfallRecipient` (I17).
+
+Auction #9 is the one to show an audience:
+
+```
+router  bid #9: 5 intents, score 836.37   WBTC @ 59902.82  A:WBTC>WETH>USDC
+                                          WETH @ 1897.29   A:USDC>DAI>WETH
+stale   bid #9: 5 intents, score 836.37   (same)
+greedy  bid #9: 5 intents, score 836.37   (same)
+venues  bid #9: 4 intents, score 794.08   WBTC @ 59482.75  A:WBTC>USDC
+direct  bid #9: 4 intents, score 794.08   (same)
+```
+
+The three path-finders found a two-hop `USDC>DAI>WETH` leg, which let them price
+a fifth intent into the batch and deliver 5.3% more surplus than the two that
+only look at direct pools. Nothing about that is scripted -- it falls out of
+where the noise trader had left the pools.
+
+Reveals fail often, and most of those are not errors. Five solvers compete over
+the same twelve freshest intents, so when one settles, every other solver's
+sealed batch is instantly unsatisfiable: the commitment is fixed, so there is no
+rebuilding and `NotLive` is certain. That is what losing looks like in this
+design, and it costs the loser exactly one commit's gas (§7.2).
+
 ## The market
 
 Four tokens, two Uniswap V2 deployments at different depths, seven pools, and a

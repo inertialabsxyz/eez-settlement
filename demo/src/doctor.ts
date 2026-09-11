@@ -69,6 +69,36 @@ for (const [label, indices] of [
   }
 }
 
+/// The check that matters most, and the one whose absence cost hours.
+///
+/// The devnet builds L1 blocks through MEV-Boost and posts `postBatch` via
+/// `eth_sendBundle` to rbuilder. When rbuilder stops bidding -- it has died with
+/// `InconsistentProofs` in its root-hash prefetcher -- the proposer builds empty
+/// blocks, no L1 transaction from anyone is included, and the L2 safe head
+/// stops advancing. Cross-chain reveals are then accepted by the front and
+/// never settle, which looks exactly like an application bug and is not one.
+console.log('\nL1 inclusion and L2 finality')
+{
+  const safe0 = (await l2.getBlock({ blockTag: 'safe' }).catch(() => null))?.number ?? -1n
+  const head0 = await l1.getBlockNumber()
+  await new Promise((r) => setTimeout(r, 30_000))
+  const safe1 = (await l2.getBlock({ blockTag: 'safe' }).catch(() => null))?.number ?? -1n
+  const head1 = await l1.getBlockNumber()
+
+  head1 > head0 ? ok(`L1 is producing blocks (${head0} -> ${head1})`) : no(`L1 is not producing blocks (stuck at ${head0})`)
+
+  if (safe1 > safe0) {
+    ok(`L2 safe head is advancing (${safe0} -> ${safe1}); postBatch is landing on L1`)
+  } else {
+    no(
+      `L2 safe head stuck at ${safe1} -- postBatch is not landing. Check rbuilder:\n` +
+        `        kurtosis service logs eez-dev el-2-reth-builder-lighthouse | grep -i inconsistent\n` +
+        `        If L1 blocks show txs=0 while transactions sit in the pool, the builder has\n` +
+        `        stopped bidding and no settlement can complete. Restart the enclave.`,
+    )
+  }
+}
+
 console.log('\nCross-chain front')
 try {
   ok(`front answers; solver[${SOLVER_INDICES[0]}] nonce ${await frontNonce(account(SOLVER_INDICES[0]).address)}`)
