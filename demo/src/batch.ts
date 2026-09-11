@@ -188,6 +188,12 @@ export function buildBatch(
 
   const groups = new Map<Sym, Group>()
   for (const i of intents) {
+    // I7: a trade needs the numeraire on one leg. `Book` accepts an intent
+    // without one -- it checks only that both tokens are registered -- and the
+    // grouping below would silently encode such an intent as a USDC leg it did
+    // not ask for, which `_validateAndScore` then rejects as `IntentMismatch`,
+    // taking the whole settlement with it. Skip it instead.
+    if (i.sell !== 'USDC' && i.buy !== 'USDC') continue
     const sym = i.sell === 'USDC' ? i.buy : i.sell
     if (sym === 'USDC') continue
     if (!groups.has(sym)) groups.set(sym, { sym, sellingNumeraire: [], sellingToken: [] })
