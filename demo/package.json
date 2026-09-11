@@ -1,0 +1,21 @@
+{
+  "name": "eez-settlement-demo",
+  "private": true,
+  "type": "module",
+  "description": "Demo-only. A swarm of users and competing solvers against a live EEZ devnet. Not covered by `forge test`; see demo/README.md.",
+  "scripts": {
+    "parity": "tsx src/parity.ts",
+    "doctor": "tsx src/doctor.ts",
+    "quotes": "tsx src/quotes.ts",
+    "bootstrap": "tsx src/bootstrap.ts",
+    "swarm": "tsx src/swarm.ts"
+  },
+  "dependencies": {
+    "viem": "^2.21.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}

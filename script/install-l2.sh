@@ -14,7 +14,7 @@ set -a; source script/dev.env; set +a
 source script/lib.sh
 set -a; source "$DEPLOYMENTS"; set +a
 
-require_env USDC WETH EXECUTOR RELAYER
+require_env USDC WETH DAI WBTC EXECUTOR RELAYER
 
 L2="--rpc-url $L2_RPC --private-key $DEPLOYER_KEY"
 L1="--rpc-url $L1_RPC --private-key $DEPLOYER_KEY"
@@ -35,10 +35,13 @@ step "TokenRegistry (L2 only)"
 # sync (§5.1.1).
 REGISTRY=$(forge create src/TokenRegistry.sol:TokenRegistry $L2 --broadcast --json | jq -r .deployedTo)
 record REGISTRY "$REGISTRY"
-cast send $L2 "$REGISTRY" 'register(address)' "$USDC" >/dev/null
-cast send $L2 "$REGISTRY" 'register(address)' "$WETH" >/dev/null
-info "usdc id $(cast call "$REGISTRY" 'idOf(address)(uint24,bool)' "$USDC" --rpc-url "$L2_RPC" | tr '\n' ' ')"
-info "weth id $(cast call "$REGISTRY" 'idOf(address)(uint24,bool)' "$WETH" --rpc-url "$L2_RPC" | tr '\n' ' ')"
+# Registration is permissionless and an id is an index, not an endorsement --
+# every invariant holds regardless of what is here. The numeraire allowlist below
+# is the governed surface (§5.1.1).
+for T in USDC WETH DAI WBTC; do
+    cast send $L2 "$REGISTRY" 'register(address)' "${!T}" >/dev/null
+    info "$T id $(cast call "$REGISTRY" 'idOf(address)(uint24,bool)' "${!T}" --rpc-url "$L2_RPC" | tr '\n' ' ')"
+done
 
 step "Book"
 # Book takes the L1 `Executor` and derives two things from it: the cross-chain

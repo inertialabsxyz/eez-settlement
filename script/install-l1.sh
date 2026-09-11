@@ -31,53 +31,113 @@ step "Tokens"
 # deployer, which then distributes. Reused rather than duplicated so the devnet
 # trades the same token the suite does.
 #
-# Both are 18 decimals, including the one called USDC. Real USDC is 6, and the
-# difference is invisible to every invariant here -- prices are ratios and
-# `PRICE_SCALE` pins only index 0 -- but it is why the numbers below read as
-# `2000 ether` rather than `2000e6`.
-USDC=$(forge create test/helpers/SettlementFixture.sol:Tok $L1 --broadcast --json \
-    --constructor-args "USDC" 1000000000000000000000000000000 | jq -r .deployedTo)
-record USDC "$USDC"
-WETH=$(forge create test/helpers/SettlementFixture.sol:Tok $L1 --broadcast --json \
-    --constructor-args "WETH" 1000000000000000000000000000000 | jq -r .deployedTo)
-record WETH "$WETH"
+# All four are 18 decimals, including the ones called USDC and WBTC. Real USDC is
+# 6 and real WBTC is 8, and the difference is invisible to every invariant here --
+# prices are ratios and `PRICE_SCALE` pins only index 0 -- but it is why the
+# numbers below read as `2000 ether` rather than `2000e6`.
+#
+# USDC is the numeraire. I7 makes the intent space a star around it: every intent
+# must have USDC on one leg, so DAI->WETH is not expressible as an intent. The
+# other three exist for the routing graph, where DAI and WBTC are genuine
+# intermediate hops.
+SUPPLY=1000000000000000000000000000000 # 1e30
+for T in USDC WETH DAI WBTC; do
+    ADDR=$(forge create test/helpers/SettlementFixture.sol:Tok $L1 --broadcast --json \
+        --constructor-args "$T" "$SUPPLY" | jq -r .deployedTo)
+    record "$T" "$ADDR"
+done
 
-step "Uniswap V2"
+step "Two Uniswap V2 deployments"
 bc() { jq -r .bytecode "$1" | sed 's/^\(0x\)\?/0x/'; }
 
-FACTORY=$(cast send $L1 --json --create \
-    "$(bc node_modules/@uniswap/v2-core/build/UniswapV2Factory.json)" \
-    "constructor(address)" "$DEPLOYER" | jq -r .contractAddress)
-record FACTORY "$FACTORY"
-
 # UniswapV2Router02's constructor demands a WETH address and stores it immutably.
-# Nothing in this harness takes an ETH path -- the settlement pair is two plain
-# ERC-20s -- so this exists only to satisfy the constructor.
+# Nothing here takes an ETH path -- every pair is two plain ERC-20s -- so this
+# exists only to satisfy the constructor, and both routers share it.
 ROUTER_WETH=$(cast send $L1 --json --create \
     "$(bc node_modules/canonical-weth/build/contracts/WETH9.json)" | jq -r .contractAddress)
 record ROUTER_WETH "$ROUTER_WETH"
 
-ROUTER=$(cast send $L1 --json --create \
-    "$(bc node_modules/@uniswap/v2-periphery/build/UniswapV2Router02.json)" \
-    "constructor(address,address)" "$FACTORY" "$ROUTER_WETH" | jq -r .contractAddress)
-record ROUTER "$ROUTER"
+# Two independent venues rather than one. A router that only ever sees a single
+# AMM is choosing between hops on the same curve; two of them, at different
+# depths, make the best route depend on trade size -- which is the thing a
+# path-finder has to reason about.
+deploy_uniswap() {
+    local tag="$1" f r
+    f=$(cast send $L1 --json --create "$(bc node_modules/@uniswap/v2-core/build/UniswapV2Factory.json)" \
+        "constructor(address)" "$DEPLOYER" | jq -r .contractAddress)
+    r=$(cast send $L1 --json --create "$(bc node_modules/@uniswap/v2-periphery/build/UniswapV2Router02.json)" \
+        "constructor(address,address)" "$f" "$ROUTER_WETH" | jq -r .contractAddress)
+    record "FACTORY_$tag" "$f"
+    record "ROUTER_$tag" "$r"
+}
+deploy_uniswap A
+deploy_uniswap B
 
-step "Liquidity: 20,000,000 USDC / 10,000 WETH"
-# Deep enough that the 2,000 USDC leg in phase 2 of the e2e moves the price by
-# about 1bp, so the settlement's residue is essentially the 0.3% Uniswap fee and
-# nothing else. A thin pool would make the residue assertion a slippage
-# measurement rather than an I17 check.
-cast send $L1 "$USDC" 'approve(address,uint256)' "$ROUTER" "$(cast max-uint)" >/dev/null
-cast send $L1 "$WETH" 'approve(address,uint256)' "$ROUTER" "$(cast max-uint)" >/dev/null
-cast send $L1 "$ROUTER" \
-    'addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)' \
-    "$USDC" "$WETH" \
-    20000000000000000000000000 10000000000000000000000 0 0 \
-    "$DEPLOYER" "$(( $(l1_now) + 3600 ))" >/dev/null
+# `script/e2e.sh` predates the second venue and addresses venue A unqualified.
+record FACTORY "$FACTORY_A"
+record ROUTER "$ROUTER_A"
 
-PAIR=$(cast call "$FACTORY" 'getPair(address,address)(address)' "$USDC" "$WETH" --rpc-url "$L1_RPC")
-record PAIR "$PAIR"
-info "reserves: $(cast call "$PAIR" 'getReserves()(uint112,uint112,uint32)' --rpc-url "$L1_RPC" | tr '\n' ' ')"
+step "Approving both routers and the OTC maker"
+OTC=$(forge create script/demo/OtcMaker.sol:OtcMaker $L1 --broadcast --json | jq -r .deployedTo)
+record OTC "$OTC"
+for T in USDC WETH DAI WBTC; do
+    for SPENDER in "$ROUTER_A" "$ROUTER_B"; do
+        cast send $L1 "${!T}" 'approve(address,uint256)' "$SPENDER" "$(cast max-uint)" >/dev/null
+    done
+done
+
+step "Pools"
+# amounts are whole tokens; the helper scales by 1e18.
+e18() { python3 -c "print(int($1 * 10**18))"; }
+pool() {
+    local router="$1" a="$2" b="$3" amt_a="$4" amt_b="$5" tag="$6" pair factory
+    cast send $L1 "$router" \
+        'addLiquidity(address,address,uint256,uint256,uint256,uint256,address,uint256)' \
+        "${!a}" "${!b}" "$(e18 "$amt_a")" "$(e18 "$amt_b")" 0 0 "$DEPLOYER" "$(( $(l1_now) + 3600 ))" >/dev/null
+    factory=$([ "$router" = "$ROUTER_A" ] && echo "$FACTORY_A" || echo "$FACTORY_B")
+    pair=$(cast call "$factory" 'getPair(address,address)(address)' "${!a}" "${!b}" --rpc-url "$L1_RPC")
+    record "PAIR_${tag}" "$pair"
+    info "  $a/$b on $tag: $amt_a / $amt_b"
+}
+
+# Venue A -- deep, and the only one carrying the DAI and WBTC hops. A solver
+# filling USDC->WETH can go direct, or USDC->DAI->WETH, or USDC->WBTC->WETH.
+info "venue A (deep)"
+pool "$ROUTER_A" USDC WETH 20000000 10000    A_USDC_WETH
+pool "$ROUTER_A" USDC DAI  10000000 10000000 A_USDC_DAI
+# Deliberately dislocated: 1,960 DAI/WETH against the 2,000 the USDC/WETH and
+# USDC/DAI pools jointly imply. Without it every multi-hop route is the direct
+# route plus a second 0.3% fee, so it can never win and the token graph is
+# decoration. A 2% gap is enough that USDC->DAI->WETH beats direct at small size
+# and loses at large, where this pool's 2,000 WETH runs thin.
+pool "$ROUTER_A" DAI  WETH 3920000  2000     A_DAI_WETH
+pool "$ROUTER_A" USDC WBTC 12000000 200      A_USDC_WBTC
+pool "$ROUTER_A" WBTC WETH 100      3000     A_WBTC_WETH
+
+# Venue B -- a fifth the depth and priced slightly better, so it wins small
+# trades on price and loses large ones to slippage. That crossover is the whole
+# reason for a second venue.
+info "venue B (shallow, better price)"
+pool "$ROUTER_B" USDC WETH 3980000 2000    B_USDC_WETH
+pool "$ROUTER_B" USDC DAI  5000000 5025000 B_USDC_DAI
+
+record PAIR "$PAIR_A_USDC_WETH"
+
+step "OTC maker"
+# Flat price until the inventory runs out, then nothing. It beats both pools on
+# small USDC->WETH and cannot fill a large one at all, so the optimal venue
+# depends on size in a way that is obvious on screen.
+otc_price() { python3 -c "print(int(10**18 * $1))"; }
+cast send $L1 "$OTC" 'setPrice(address,address,uint256)' "$USDC" "$WETH" "$(otc_price "1/1985")" >/dev/null
+cast send $L1 "$OTC" 'setPrice(address,address,uint256)' "$WETH" "$USDC" "$(otc_price 1995)"      >/dev/null
+cast send $L1 "$OTC" 'setPrice(address,address,uint256)' "$USDC" "$DAI"  "$(otc_price "1.002")"   >/dev/null
+cast send $L1 "$OTC" 'setPrice(address,address,uint256)' "$DAI"  "$USDC" "$(otc_price "0.998")"   >/dev/null
+cast send $L1 "$WETH" 'transfer(address,uint256)' "$OTC" "$(e18 50)"     >/dev/null
+cast send $L1 "$USDC" 'transfer(address,uint256)' "$OTC" "$(e18 200000)" >/dev/null
+cast send $L1 "$DAI"  'transfer(address,uint256)' "$OTC" "$(e18 200000)" >/dev/null
+info "inventory: 50 WETH, 200,000 USDC, 200,000 DAI"
+info "quote 2,000 USDC -> WETH: $(cast from-wei "$(cast call "$OTC" 'quote(address,address,uint256)(uint256)' "$USDC" "$WETH" "$(e18 2000)" --rpc-url "$L1_RPC" | awk '{print $1}')")"
+info "quote 200,000 USDC -> WETH: $(cast call "$OTC" 'quote(address,address,uint256)(uint256)' "$USDC" "$WETH" "$(e18 200000)" --rpc-url "$L1_RPC" | awk '{print $1}') (0 = beyond inventory)"
 
 step "Executor (constructs Relayer)"
 # §13.2 is open and this address is not an answer to it -- see script/dev.env.
