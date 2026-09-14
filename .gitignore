@@ -27,3 +27,7 @@ package-lock.json
 script/deployments.env
 demo/node_modules/
 demo/package-lock.json
+
+# The planning repo, cloned here for visibility. Private — must never be
+# committed into this public repository.
+eez-settlement-planning/
