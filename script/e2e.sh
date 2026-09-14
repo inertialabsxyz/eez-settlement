@@ -18,6 +18,13 @@
 #          through a real Uniswap V2 pool inside the settlement. This is the
 #          "liquidity sourced on L1 inside a single dispatch" claim, and it is
 #          the case that exercises `_interact` and the residue sweep (I17).
+#   unwind a settlement L1 must reject, dispatched anyway. The payload passes
+#          every L2 check -- `Book` discarded the signature at submission and
+#          never looks at one again -- and dies in `Executor._verifyAndPull`
+#          (I9). Asserts that nothing moved on either chain: the auction is
+#          still unsettled, the intent still `Live`, the nonce unspent, every
+#          balance where it started. This is §4's compromised-L2 claim and
+#          §13.4's missing half.
 #
 # Everything here asserts on the EFFECT, never on the exit code of a send. §13.4
 # records that the previous harness did the opposite and passed vacuously; on
@@ -160,7 +167,7 @@ plan() {
 #
 # Returns 0 when the settlement is observably complete on both sides.
 run_auction() {
-    local label="$1" claimed_score="$2"
+    local label="$1" claimed_score="$2" expect="${3:-settle}"
     local id commitment score calldata t_c t_r sent_nonce hash i settled
 
     id=$(cast call "$BOOK" 'liveAuction()(uint256)' --rpc-url "$L2_RPC" | awk '{print $1}')
@@ -204,6 +211,19 @@ run_auction() {
         [ "$settled" = "true" ] && break
         sleep 2
     done
+
+    # The unwind case. §9 says the whole settlement lands on L1 or none of it
+    # does; here the L1 leg is built to fail, so "not settled" is the pass
+    # condition and a settlement would be the defect.
+    if [ "$expect" = "unwind" ]; then
+        if [ "$settled" = "true" ]; then
+            fail "$label: auction $id SETTLED -- a payload L1 must reject was accepted anyway"
+            return 1
+        fi
+        pass "$label: auction $id did not settle -- L1 rejected the payload"
+        LAST_AUCTION="$id"
+        return 0
+    fi
 
     if [ "$settled" != "true" ]; then
         note "auction $id is not settled (L2 now $(l2_now), T_R $t_r)"
@@ -393,6 +413,96 @@ phase_route() {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 3 -- a failing L1 leg unwinds the L2 writes
+# ---------------------------------------------------------------------------
+
+phase_unwind() {
+    step "Phase 3: a settlement L1 must reject leaves no trace on L2 (§13.4)"
+
+    local dl sell limit a_usdc0 a_weth0 x_usdc0 w_weth0 sig_wrong id_a auction settled state
+    dl=$(( $(l2_now) + 86400 ))
+    sell=1000000000000000000000              # 1,000 USDC
+    limit=400000000000000000                 # 0.4 WETH -- deliberately slack
+
+    a_usdc0=$(balance_of "$USDC" "$ALICE" "$L1_RPC"); a_weth0=$(balance_of "$WETH" "$ALICE" "$L1_RPC")
+    x_usdc0=$(balance_of "$USDC" "$EXECUTOR" "$L1_RPC"); w_weth0=$(balance_of "$WETH" "$WINDFALL" "$L1_RPC")
+
+    # Without this the phase proves nothing. `_verifyAndPull` checks every
+    # signature before it pulls anything, so an alice holding no USDC produces
+    # exactly the same "nothing moved" result whether I9 rejected the payload or
+    # she simply had nothing to take.
+    if ! bn_gt "$a_usdc0" "$sell"; then
+        fail "unwind: alice holds $(cast from-wei "$a_usdc0") USDC, less than the $(cast from-wei "$sell") this phase sells -- every assertion below would pass for the wrong reason"
+        return 1
+    fi
+
+    # Alice submits a real intent and Book accepts it: the signature she gives
+    # `submitIntent` is over exactly these terms.
+    local sig_real
+    sig_real=$(sign_intent "$ALICE_KEY" "$ALICE" "$USDC" "$WETH" "$sell" "$limit" "$dl" 2)
+    id_a=$(submit_intent "$ALICE_KEY" "$ALICE" "$USDC" "$WETH" "$sell" "$limit" "$dl" 2 "$sig_real")
+    info "intent $id_a accepted on L2 -- Book verified alice's signature over 1,000 USDC"
+
+    # Now the solver builds a settlement over that intent but attaches a
+    # signature alice made over a *different* sell amount.
+    #
+    # This is the compromised-L2 scenario from §4, reduced to its smallest form.
+    # `Book` cannot catch it: it verified a signature at submission and then
+    # discarded it (§5.1), and `_validateAndScore` never looks at signatures at
+    # all -- it checks the trade against stored intent state, which matches.
+    # So L2 accepts the reveal and dispatches. The only thing standing between
+    # this payload and alice's tokens is `Executor._verifyAndPull` re-deriving
+    # the digest on L1 (I9).
+    sig_wrong=$(sign_intent "$ALICE_KEY" "$ALICE" "$USDC" "$WETH" 999000000000000000000 "$limit" "$dl" 2)
+    info "solver substitutes a signature over 999 USDC for the 1,000 USDC trade"
+
+    export TOKENS="$USDC,$WETH"
+    export PRICES="$PRICE_SCALE,2100000000000000000000"
+    export TRADE_ACCOUNTS="$ALICE"
+    export TRADE_SELL_IDX="0"
+    export TRADE_BUY_IDX="1"
+    export TRADE_SELL_AMOUNTS="$sell"
+    export TRADE_LIMITS="$limit"
+    export TRADE_DEADLINES="$dl"
+    export TRADE_NONCES="2"
+    export INTENT_IDS="$id_a"
+    export SIGS="$sig_wrong"
+    unset CALL_TARGETS CALL_DATAS
+    SALT=0x0000000000000000000000000000000000000000000000000000000000000003
+
+    # No retry: a rejection is the expected outcome, so retrying would only
+    # spend three commit windows re-confirming it.
+    auction=$(cast call "$BOOK" 'liveAuction()(uint256)' --rpc-url "$L2_RPC" | awk '{print $1}')
+    run_auction "unwind" exact unwind || return 1
+    auction="$LAST_AUCTION"
+
+    step "Phase 3 effects -- nothing moved, on either chain"
+
+    # I9 is enforced on L1 and only on L1. Book had no way to reject this.
+    expect_eq "alice nonce 2 NOT consumed on L1 (I9 rejected the pull)" \
+        "$(nonce_used_on_l1 "$ALICE" 2)" "false"
+
+    # §9: the whole settlement lands or none of it does. Every L2 write in
+    # `revealAndExecute` -- the `settled` flag and the FILLED state -- unwinds
+    # with the L1 revert.
+    expect_eq "auction $auction is still unsettled on L2" "$(auction_settled "$auction")" "false"
+    expect_eq "intent $id_a is still LIVE on L2, not FILLED" "$(intent_state "$id_a")" "1"
+
+    # The user is untouched. This is the property the whole L1/L2 split exists
+    # to provide (§4): a compromised L2 cannot move funds the user did not sign
+    # for, and a failed attempt costs the user nothing at all.
+    expect_eq "alice USDC unchanged" "$(balance_of "$USDC" "$ALICE" "$L1_RPC")" "$a_usdc0"
+    expect_eq "alice WETH unchanged" "$(balance_of "$WETH" "$ALICE" "$L1_RPC")" "$a_weth0"
+    expect_eq "executor USDC unchanged (I11)" "$(balance_of "$USDC" "$EXECUTOR" "$L1_RPC")" "$x_usdc0"
+    expect_eq "windfall WETH unchanged (I17)" "$(balance_of "$WETH" "$WINDFALL" "$L1_RPC")" "$w_weth0"
+
+    # And the intent survives to be settled properly by a later auction, which
+    # is what makes the failure cost the solver their gas and nobody else
+    # anything (§7.2).
+    note "intent $id_a remains available to any solver -- the failed reveal cost only the solver's gas"
+}
+
+# ---------------------------------------------------------------------------
 
 step "Settlement e2e against $KURTOSIS_ENCLAVE"
 info "book     $BOOK (L2 $L2_CHAIN_ID)"
@@ -401,10 +511,11 @@ info "windfall $WINDFALL  (devnet placeholder; §13.2 is open)"
 info "COMMIT_WINDOW ${COMMIT_WINDOW}s, REVEAL_WINDOW ${REVEAL_WINDOW}s  (§13.3 placeholders)"
 
 case "$WHICH" in
-    cow)   phase_cow ;;
-    route) phase_route ;;
-    all)   phase_cow; phase_route ;;
-    *)     die "unknown phase '$WHICH' (want cow, route or all)" ;;
+    cow)    phase_cow ;;
+    route)  phase_route ;;
+    unwind) phase_unwind ;;
+    all)    phase_cow; phase_route; phase_unwind ;;
+    *)      die "unknown phase '$WHICH' (want cow, route, unwind or all)" ;;
 esac
 
 step "Result"

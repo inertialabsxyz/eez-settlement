@@ -155,9 +155,15 @@ step "Funding the traders"
 for who in "$ALICE" "$BOB"; do
     cast send $L1 "$who" --value 1ether >/dev/null
 done
-# Alice sells 2,000 USDC in each of the two settlements; Bob sells 1 WETH in the
-# first and nothing in the second.
-cast send $L1 "$USDC" 'transfer(address,uint256)' "$ALICE" 4000000000000000000000 >/dev/null
+# Alice sells 2,000 USDC in each of the first two settlements and 1,000 in the
+# third; Bob sells 1 WETH in the first and nothing after.
+#
+# The third phase is funded deliberately. It asserts that a settlement L1 must
+# reject moves nothing, and `Executor._verifyAndPull` checks signatures before
+# it pulls -- so an alice with no USDC would produce exactly the same "nothing
+# moved" result whether the signature check worked or not. Giving her the tokens
+# is what makes that assertion mean something.
+cast send $L1 "$USDC" 'transfer(address,uint256)' "$ALICE" 6000000000000000000000 >/dev/null
 cast send $L1 "$WETH" 'transfer(address,uint256)' "$BOB"   1000000000000000000    >/dev/null
 info "alice USDC $(cast from-wei "$(balance_of "$USDC" "$ALICE" "$L1_RPC")")"
 info "bob   WETH $(cast from-wei "$(balance_of "$WETH" "$BOB" "$L1_RPC")")"
