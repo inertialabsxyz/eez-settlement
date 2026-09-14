@@ -83,7 +83,9 @@ docs/                settlement-spec.md — the design of record
 
 ## Running it
 
-The quality gate, and the only thing that gates a commit:
+### The quality gate
+
+The only thing that gates a commit:
 
 ```sh
 forge test
@@ -92,23 +94,64 @@ forge test
 `forge build` is not a substitute — this codebase's whole argument is that its invariants hold, and
 only the tests demonstrate that.
 
-Against a live EEZ devnet, in order:
+### Against a live devnet
+
+Everything below needs a running EEZ network. That comes from
+**[eez-rollup0](https://github.com/inertialabsxyz/eez-rollup0)**, whose
+[`testing/kurtosis/README.md`](https://github.com/inertialabsxyz/eez-rollup0/blob/main/testing/kurtosis/README.md)
+is the authoritative guide — it covers the topology, the funded development accounts, the block
+explorers, generating cross-chain traffic, and capturing diagnostics. Read it rather than relying on
+the summary here.
+
+The short version. You need Docker, the [Kurtosis CLI](https://docs.kurtosis.com/install/),
+[Foundry](https://getfoundry.sh/introduction/installation/) v1.7.1, and the usual shell tools
+(`jq`, `curl`, `openssl`, GNU `timeout`). Then, from an `eez-rollup0` checkout:
 
 ```sh
-# a running enclave (see eez-rollup0/testing/kurtosis)
-npm install
-bash script/install-l1.sh     # tokens, Uniswap venues, Executor (+Relayer)
-bash script/install-l2.sh     # TokenRegistry, Book, both cross-chain proxies
-bash script/e2e.sh all        # scripted: coincidence-of-wants, then a routed fill
+git submodule update --init --recursive eez-core-protocol
+kurtosis engine start
 
-cd demo && npm install
-npm run bootstrap && npm run doctor && npm run swarm 10
+export KURTOSIS_ENCLAVE=eez-dev
+export KURTOSIS_ARGS_FILE="$PWD/testing/kurtosis/ci-args.yaml"
+bash testing/kurtosis/start.sh "$KURTOSIS_ARGS_FILE"
 ```
 
-`script/README.md` and `demo/README.md` document the devnet's failure modes, several of which fail
-silently. Run `npm run doctor` before anything else — it checks that L1 is including transactions and
-the L2 safe head is advancing, which is the failure that most convincingly imitates an application
-bug.
+The first start builds three images and takes several minutes. `bash testing/kurtosis/stop.sh` tears
+it down and is destructive — it removes the enclave and its chain state.
+
+Then, back in this repository:
+
+```sh
+export KURTOSIS_ENCLAVE=eez-dev   # every shell; script/dev.env reads it
+
+npm install                       # prebuilt Uniswap V2 artefacts, devnet-only
+bash script/install-l1.sh         # tokens, Uniswap venues, Executor (+Relayer)
+bash script/install-l2.sh         # TokenRegistry, Book, both cross-chain proxies
+bash script/e2e.sh all            # cow, then a routed fill, then the unwind
+
+cd demo && npm install
+npm run bootstrap                 # funds users; solvers get nothing but gas
+npm run doctor                    # preflight — run this before anything else
+npm run swarm 10
+```
+
+### Three things that will otherwise cost you an afternoon
+
+**Run one enclave at a time.** Two full EEZ networks do not fit in a default Docker memory
+allocation. The builder is the first thing the OOM killer takes, and when it dies no L1 transaction
+from anyone is included — which looks exactly like an application bug and is not one.
+
+**Wait for finality before deploying.** A fresh enclave produces empty L1 blocks and a safe head of
+zero for two to three minutes while the builder registers with the relay. That is normal startup, not
+failure.
+
+**`npm run doctor` first, every time.** It checks the deployment is addressable, both chains agree on
+the EIP-712 domain, and — the one that matters — that L1 is including transactions and the L2 safe
+head is advancing. A stalled safe head means no settlement can complete, and every symptom above it
+imitates a bug in this repository.
+
+`script/README.md` and `demo/README.md` catalogue the rest, including several devnet behaviours that
+fail silently rather than loudly.
 
 ## Status: what is not decided
 
