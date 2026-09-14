@@ -11,8 +11,10 @@ out/
 /broadcast/*/31337/
 /broadcast/**/dry-run/
 
-# Docs
-docs/
+# Docs — generated `forge doc` output only; handwritten docs are tracked
+docs/src/
+docs/book/
+docs/book.toml
 
 # Dotenv file
 .env

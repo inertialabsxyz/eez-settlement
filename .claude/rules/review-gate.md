@@ -4,8 +4,7 @@ After completing a feature or bug fix — before opening a PR — the implementa
 a review agent to verify the work against the source requirements. This is a hard gate, equivalent to
 `forge test`.
 
-The requirements source is always `settlement-spec.md`, in the private repository
-`github.com/inertialabsxyz/eez-settlement-planning`. It is the design of record: its
+The requirements source is always `docs/settlement-spec.md`. It is the design of record: its
 appendices A–E contain reference implementations of all five contracts, and `src/` is those
 appendices extracted verbatim. So the review is a two-way check — the implementation must match the
 spec, *and* the spec must still describe the implementation.
@@ -38,7 +37,7 @@ implementation against its source requirements, fix any gaps, and commit the fix
 <one-sentence summary of the feature/fix>
 
 ## Requirements source
-Read the requirements from: <path to the spec clone>/settlement-spec.md, section "<§N — Section Name>"
+Read the requirements from: docs/settlement-spec.md, section "<§N — Section Name>"
 <and, if a contract changed: and Appendix <X> — `<Contract>`>
 
 ## Invariants touched

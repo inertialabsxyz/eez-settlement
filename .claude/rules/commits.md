@@ -25,15 +25,10 @@ docs(spec): mark §13.2 windfallRecipient as still blocking
 
 **Scope:** One logical change per commit. Don't bundle unrelated fixes.
 
-**Spec and code still move together, across two repositories.** The design of record is
-`settlement-spec.md` in `github.com/inertialabsxyz/eez-settlement-planning`, and `src/` is its
-appendices extracted verbatim. They can no longer be committed atomically, which makes the
-obligation easier to drop and no less real: a change to one that should have changed the other is
-still incomplete work.
-
-So when a change needs both, the commit message here names the spec commit — or says plainly that
-the spec change is outstanding and why. A PR that changed `src/` without saying what happened to the
-appendix should not be approved. Never edit the spec to match code you have just written.
+**Spec and code move together.** `docs/settlement-spec.md` is the design of record and `src/` is
+its appendices extracted verbatim. A change to one that should have changed the other is an
+incomplete commit — either commit both, or say in the message which one you deliberately left and
+why. Never edit the spec to match code you have just written.
 
 **Two things you may not commit a resolution for.** §13.2 (`windfallRecipient`'s address) and §13.3
 (`COMMIT_WINDOW` and batching cadence) are open questions that block implementation. Flag them and

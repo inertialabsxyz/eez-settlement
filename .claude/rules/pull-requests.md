@@ -19,7 +19,7 @@ to go green without reformatting the matching spec appendices in the same commit
   (see `.claude/rules/commits.md`)
 - **Body:** summarise what changed (bullet points from the commits) and reference the spec section it
   implements or corrects (e.g. _Implements §9.1 — why the residue must not go to the solver,
-  the spec repository_)
+  `docs/settlement-spec.md`_)
 
 ```bash
 git push -u origin <branch>
