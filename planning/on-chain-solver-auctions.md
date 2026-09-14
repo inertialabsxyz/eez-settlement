@@ -2,10 +2,10 @@
 
 *A proposal to extend the CoW model, and a working prototype.*
 
-> **Draft.** Two things in this document are not yet verified and are marked inline:
-> claims about CoW Protocol's parameters, which need sourcing before this is sent
-> anywhere (see *Claims to verify*), and one experimental result that has been
-> implemented but not yet run (see §5).
+> **Draft.** Claims about CoW Protocol's own parameters are taken from this project's
+> notes and are **not independently verified** — they carry `[cow-N]` markers and are
+> listed under *Claims to verify*. Everything asserted about this design has been
+> observed on a live devnet.
 
 ---
 
@@ -116,11 +116,22 @@ auction — a sealed bid cannot be checked, which is precisely what sealing cost
 reveal when the score is recomputed, having paid gas for nothing. A losing solver promotes the runner
 up and the batch settles.
 
-> **§5 is incomplete.** The remaining claim — that a settlement which *fails* on L1 leaves no trace on
-> L2, which is the whole basis of the "no penalty regime" argument — is implemented but has not yet
-> been run. It must not be written up until it has been observed. The experiment: submit a valid
-> intent, then dispatch a settlement carrying a signature over different terms. L2 cannot detect it;
-> L1 must reject it; nothing may move on either chain.
+**A failed settlement leaves no trace.** This is the basis of the "no penalty regime" argument, so
+it is worth stating precisely what was done. Alice signs a genuine intent to sell 1,000 USDC and the
+L2 accepts it. A solver then reveals a batch carrying a signature she made over a *different* amount.
+
+The L2 cannot detect this. It verified a signature when the intent was submitted and then discarded
+it — storing 65 bytes per intent is not affordable — and the scoring code never reads a signature at
+all, checking only that the trade matches the stored intent, which it does. So the L2 accepted the
+forged batch, scored it, and dispatched it. This is what a fully compromised L2 gets to do.
+
+L1 re-derived the signature digest, recovered a different address, and reverted. Every L2 write
+unwound with it: the auction unsettled, the intent still live rather than filled, the user's nonce
+unspent, and every balance — hers, the executor's, the residue account's — exactly where it started.
+The intent stayed available for a later solver to fill properly.
+
+There is no interval in which that failure could have stranded anyone, because there is no interval.
+The cost fell entirely on the solver, and it was one transaction's gas.
 
 ## 6. What it costs
 
