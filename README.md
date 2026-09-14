@@ -9,8 +9,14 @@ already protected on-chain by their signed limit price. What they trust off-chai
 fairness* — whether the winning solution really was the best available. This design moves that
 question on-chain.
 
-**`planning/settlement-spec.md` is the design of record.** Appendices A–E are the five contracts, and
-`src/` is those appendices extracted. Where this README and the spec disagree, the spec wins.
+**The design of record is `settlement-spec.md`, maintained privately** in
+`github.com/inertialabsxyz/eez-settlement-planning`. Appendices A–E are the five contracts and `src/` is
+those appendices extracted; where this README and the spec disagree, the spec wins.
+
+That has a consequence worth stating plainly: the `§N` and `I<n>` citations throughout this
+repository — in contract comments, tests and scripts — refer to a document that is not public. They
+are load-bearing rather than decorative, and without the spec a reader can see *what* the code
+enforces but not *why* it is the right thing to enforce.
 
 ## Three properties
 
@@ -57,7 +63,7 @@ Invariants **I9–I13** are the set that survives that scenario, and they are th
 | | |
 |---|---|
 | `forge test` | 152 tests, 10 suites — unit, integration, fuzz and invariant |
-| Invariants | I1–I19 numbered in §10, cited at their enforcement sites, matrix in `planning/invariant-coverage.md` |
+| Invariants | I1–I19 numbered in §10, cited at their enforcement sites, matrix in the spec repository |
 | Devnet end-to-end | Two settlements on a live EEZ enclave: one netting to zero, one routed through a real Uniswap V2 pool |
 | Live market | 197 intents, 9 auctions, 6 settlements filling 33 intents, five competing solvers |
 | Gas | §11, each figure labelled **measured** or **estimated** |
@@ -73,8 +79,9 @@ src/                 the five contracts, extracted from Appendices A–E
 test/                the quality gate: unit, integration, fuzz, invariant
 script/              devnet deployment and a scripted end-to-end settlement
 demo/                a live market — users, competing solvers, a noise trader
-planning/            settlement-spec.md (design of record), invariant coverage
 ```
+
+The specification and invariant coverage matrix live in a separate private repository.
 
 ## Running it
 

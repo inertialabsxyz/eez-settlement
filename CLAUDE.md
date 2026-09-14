@@ -10,8 +10,14 @@ These conventions take precedence over `~/.claude/CLAUDE.md` where they conflict
 
 ## The specification is the source of truth
 
-`planning/settlement-spec.md` is the design of record. Its appendices A–E contain reference
-implementations of all five contracts, and `src/` is those appendices extracted verbatim.
+`settlement-spec.md` is the design of record. It lives in a **separate private repository**,
+`github.com/inertialabsxyz/eez-settlement-planning`, alongside the invariant coverage matrix. Its
+appendices A–E contain reference implementations of all five contracts, and `src/` is those
+appendices extracted verbatim.
+
+Clone it beside this one. Every `§N` and `I<n>` in this repository refers to it, and there are
+roughly 180 such citations — working on `src/` without it means editing code whose reasoning is
+unavailable to you.
 
 **If code and spec disagree, that is a defect in one of them — not a thing to work around.** Decide
 which is wrong, fix that one, and say which you changed. Do not silently make the code match a spec
