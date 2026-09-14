@@ -12,14 +12,14 @@ cd eez-settlement
 npm install                   # prebuilt Uniswap V2 artefacts, devnet-only
 bash script/install-l1.sh     # tokens, Uniswap venue, Executor (+Relayer)
 bash script/install-l2.sh     # TokenRegistry, Book, both cross-chain proxies
-bash script/e2e.sh all        # cow | route | all
+bash script/e2e.sh all        # cow | route | unwind | all
 ```
 
 Addresses land in `script/deployments.env`, which is generated and gitignored.
 Each installer is a fresh deployment, not an upgrade: `Executor.setL2Caller` is
 one-shot, so a new `Book` needs a new `Executor`, which means re-running both.
 
-## What the two phases settle
+## What the three phases settle
 
 **`cow`** — Alice sells 2,000 USDC for at least 0.9 WETH, Bob sells 1 WETH for at
 least 1,900 USDC. At 2,000 USDC/WETH they fill each other exactly: no
@@ -39,6 +39,32 @@ Measured on the `eez-dev` enclave: Alice is paid exactly
 its opening balance of both tokens, and 0.044519656628329394 WETH of residue —
 the Uniswap fee, which nobody in the batch has a claim on — is swept to
 `windfallRecipient`, where the solver cannot reach it (I17).
+
+**`unwind`** — a settlement L1 must reject, dispatched anyway. Alice submits a
+genuine intent to sell 1,000 USDC and `Book` accepts it; the solver then reveals
+a batch carrying a signature she made over **999 USDC**.
+
+L2 cannot catch that, and the phase is built to prove it rather than assume it.
+`submitIntent` verified a signature and then discarded it — storing 65 bytes per
+intent would cost three more slots and break the two-slot layout in §5.1 — and
+`_validateAndScore` never reads one, checking only the trade against stored
+intent state, which matches exactly. So L2 accepts the forged payload, scores it,
+and dispatches. That is precisely what a fully compromised L2 gets to do (§4).
+
+`Executor._verifyAndPull` re-derives the digest on L1, recovers a different
+address, and reverts (I9). Everything unwinds with it: the auction is still
+unsettled, the intent still `LIVE` rather than `FILLED`, Alice's nonce unspent on
+L1, and her balance, `Executor`'s and `windfallRecipient`'s all exactly where
+they started. The intent survives for a later solver, so the attempt cost the
+solver their gas and nobody else anything (§7.2). This is §13.4, closed.
+
+Two things worth knowing if you touch this phase. Alice must be *funded* for it
+to mean anything — `_verifyAndPull` checks every signature before it pulls, so a
+broke Alice yields the same "nothing moved" result whether I9 rejected the
+payload or there was simply nothing to take; the phase refuses to run if her
+balance is below what it sells. And the signature must be a real one over
+different terms, not a malformed blob: `ECDSA.recover` reverts on malformed
+input, which would fail for the wrong reason.
 
 `minOut` on the swap is the user's payout rather than a percentage band. The
 route therefore reverts precisely when the pool has moved enough to make the
