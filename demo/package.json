@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "description": "Demo-only. A swarm of users and competing solvers against a live EEZ devnet. Not covered by `forge test`; see demo/README.md.",
+  "license": "MIT",
   "scripts": {
     "parity": "tsx src/parity.ts",
     "doctor": "tsx src/doctor.ts",

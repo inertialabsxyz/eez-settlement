@@ -176,6 +176,10 @@ cannot detect that and accepts it; L1 re-derives the digest, rejects it (I9), an
 unwinds with it. Observed on a live devnet: auction unsettled, intent still `Live`, nonce unspent,
 every balance untouched.
 
+## Licence
+
+MIT. Every contract carries a matching `SPDX-License-Identifier`.
+
 ## Conventions
 
 `CLAUDE.md` and `.claude/rules/` carry the working conventions: the spec is the source of truth,
